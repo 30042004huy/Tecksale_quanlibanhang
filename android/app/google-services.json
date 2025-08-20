@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "155365281335",
+    "firebase_url": "https://sample-firebase-ai-app-bdd63-default-rtdb.firebaseio.com",
+    "project_id": "sample-firebase-ai-app-bdd63",
+    "storage_bucket": "sample-firebase-ai-app-bdd63.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:155365281335:android:cab975369ba5788cf8b9b2",
+        "android_client_info": {
+          "package_name": "com.example.tecksale_quanlybanhang"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCHERap5iSSd1nakiX2W2iDMVms29NQMnA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
