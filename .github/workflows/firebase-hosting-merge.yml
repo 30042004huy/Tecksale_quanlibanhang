@@ -21,7 +21,7 @@ jobs:
           channel: 'stable' # Dùng bản Flutter stable
 
       # Bước 3: Build app Flutter Web (thay vì 'npm run build')
-      - run: flutter build web --release
+      - run: flutter build web --release --web-renderer canvaskit
         # Nó sẽ tạo ra thư mục 'build/web'
 
       # Bước 4: Deploy lên Firebase Hosting
