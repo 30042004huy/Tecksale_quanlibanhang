@@ -7,7 +7,6 @@ version: 1.1.1+1
 environment:
   sdk: ">=3.3.0 <4.0.0"
 
-
 dependencies:
   flutter:
     sdk: flutter
@@ -24,7 +23,7 @@ dependencies:
   flutter_svg: ^2.0.7
   shared_preferences: ^2.1.1
   url_launcher: ^6.2.5
-  image: ^3.2.0                 # ĐÃ SỬA: Hạ cấp để tương thích với esc_pos_utils
+  image: ^3.2.0
   flutter_blue_plus: ^1.31.13
   permission_handler: ^12.0.1
   intl: ^0.20.2
@@ -46,32 +45,30 @@ dependencies:
   material_design_icons_flutter: ^7.0.7296
   audioplayers: ^5.2.0
   flutter_staggered_animations: ^1.1.1
-  esc_pos_printer: ^4.1.0 
-  esc_pos_utils: ^1.1.0 
-  collection: ^1.15.0
-  animate_do: ^3.3.4 # Thêm dòng này
+  esc_pos_printer: ^4.1.0
+  esc_pos_utils: ^1.1.0
+  collection: ^1.15.0 # Ghim phiên bản cũ hơn
+  animate_do: ^3.3.4
   geolocator: ^10.1.0
   geocoding: ^2.1.1
-  sliding_up_panel: ^2.0.0+1 # Cho bảng điều khiển trượt lên
-  flutter_animate: ^4.5.0    # Cho hiệu ứng animation
-  shimmer: ^3.0.0            # Hiệu ứng loading óng ánh
-  flutter_staggered_grid_view: ^0.7.0 # Để sắp xếp các nút bấm đẹp hơn
+  sliding_up_panel: ^2.0.0+1
+  flutter_animate: ^4.5.0
+  shimmer: ^3.0.0
+  flutter_staggered_grid_view: ^0.7.0
   math_expressions: ^2.4.0
   uuid: ^4.4.0
-  file_saver: ^0.3.1
-
-
+  # Hạ cấp file_saver để tương thích với 'collection'
+  file_saver: ^0.2.12
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^6.0.0
-  flutter_launcher_icons: ^0.11.0 # ĐÃ SỬA: Hạ cấp để tương thích với image ^3.x.x
-
+  # Hạ cấp lints để tương thích với Flutter 3.35.7
+  flutter_lints: ^3.0.0
+  flutter_launcher_icons: ^0.11.0
 
 flutter:
   uses-material-design: true
-
   assets:
     - assets/images/
     - assets/sound/

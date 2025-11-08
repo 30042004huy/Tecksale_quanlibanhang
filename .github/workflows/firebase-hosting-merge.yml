@@ -6,7 +6,6 @@ on:
   push:
     branches:
       - main 
-    # (Nếu branch của bạn là 'master', hãy sửa 'main' thành 'master')
 
 jobs:
   build_and_deploy:
@@ -15,10 +14,10 @@ jobs:
       # Bước 1: Lấy code của bạn từ GitHub
       - uses: actions/checkout@v4
 
-      # Bước 2: Cài đặt Flutter (ĐÃ SỬA LỖI THỤT ĐẦU DÒNG)
+      # Bước 2: Cài đặt Flutter (Đã sửa lỗi thụt đầu dòng)
       - uses: subosito/flutter-action@v2
-           with:
-             flutter-version: '3.35.7'
+        with: # 'with' phải thụt vào trong so với '- uses'
+          flutter-version: '3.35.7' # Ghim cứng phiên bản giống máy của bạn
 
       # Bước 3: Build app Flutter Web
       - run: flutter build web --release --web-renderer canvaskit
@@ -30,4 +29,4 @@ jobs:
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SAMPLE_FIREBASE_AI_APP_BDD63 }}
           channelId: live 
           projectId: sample-firebase-ai-app-bdd63
-          target: admin-panel # <-- QUAN TRỌNG: Tên "target" trong file firebase.json
+          target: admin-panel # Tên "target" trong file firebase.json
