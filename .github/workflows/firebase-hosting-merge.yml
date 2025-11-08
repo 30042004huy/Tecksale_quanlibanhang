@@ -17,8 +17,8 @@ jobs:
 
       # Bước 2: Cài đặt Flutter (thay vì 'npm ci')
       - uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable' # Dùng bản Flutter stable
+  with:
+    flutter-version: '3.22.2' # <-- Sửa dòng này
 
       # Bước 3: Build app Flutter Web (thay vì 'npm run build')
       - run: flutter build web --release --web-renderer canvaskit
