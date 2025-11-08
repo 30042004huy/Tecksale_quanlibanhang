@@ -9,13 +9,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.35.7'
+         with:
+            flutter-version: '3.35.7'
       - run: flutter build web --release --web-renderer canvaskit
       - uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SAMPLE_FIREBASE_AI_APP_BDD63 }}
-          channelId: live
-          projectId: sample-firebase-ai-app-bdd63
-          target: admin-panel
+          with:
+            repoToken: ${{ secrets.GITHUB_TOKEN }}
+            firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SAMPLE_FIREBASE_AI_APP_BDD63 }}
+            channelId: live
+            projectId: sample-firebase-ai-app-bdd63
+            target: admin-panel
