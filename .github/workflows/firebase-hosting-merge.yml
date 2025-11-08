@@ -15,21 +15,19 @@ jobs:
       # Bước 1: Lấy code của bạn từ GitHub
       - uses: actions/checkout@v4
 
-      # Bước 2: Cài đặt Flutter (thay vì 'npm ci')
+      # Bước 2: Cài đặt Flutter (ĐÃ SỬA LỖI THỤT ĐẦU DÒNG)
       - uses: subosito/flutter-action@v2
-  with:
-    flutter-version: '3.22.2' # <-- Sửa dòng này
+        with:
+          flutter-version: '3.22.2' # Chỉ định phiên bản
 
-      # Bước 3: Build app Flutter Web (thay vì 'npm run build')
+      # Bước 3: Build app Flutter Web
       - run: flutter build web --release --web-renderer canvaskit
-        # Nó sẽ tạo ra thư mục 'build/web'
 
       # Bước 4: Deploy lên Firebase Hosting
       - uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
-          # Đây là Secret mà Firebase tự tạo cho bạn
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SAMPLE_FIREBASE_AI_APP_BDD63 }}
-          channelId: live # Deploy lên kênh 'live' (chính thức)
-          projectId: sample-firebase-ai-app-bdd63 # ID dự án của bạn
+          channelId: live 
+          projectId: sample-firebase-ai-app-bdd63
           target: admin-panel # <-- QUAN TRỌNG: Tên "target" trong file firebase.json
