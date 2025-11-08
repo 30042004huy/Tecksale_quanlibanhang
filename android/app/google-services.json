@@ -8,6 +8,44 @@
   "client": [
     {
       "client_info": {
+        "mobilesdk_app_id": "1:155365281335:android:f4a5f086774cfbfdf8b9b2",
+        "android_client_info": {
+          "package_name": "com.example.admin_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCHERap5iSSd1nakiX2W2iDMVms29NQMnA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:155365281335:android:87413271dc3aeb24f8b9b2",
+        "android_client_info": {
+          "package_name": "com.example.tecksale_nhanvien"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCHERap5iSSd1nakiX2W2iDMVms29NQMnA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
         "mobilesdk_app_id": "1:155365281335:android:cab975369ba5788cf8b9b2",
         "android_client_info": {
           "package_name": "com.example.tecksale_quanlybanhang"

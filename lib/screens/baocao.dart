@@ -21,7 +21,7 @@ class _BaoCaoScreenState extends State<BaoCaoScreen> with TickerProviderStateMix
   String _selectedPeriod = 'Ngày'; // Ngày, Tuần, Tháng, Khoảng
   bool _isLoading = false;
   bool _showProfit = false;
-  
+  bool _showAllOrders = false; // false: Chỉ hoàn tất, true: Tất cả (hoàn tất + đã lưu)
   List<OrderData> _completedOrders = [];
   List<SanPham> _allProducts = [];
   Map<String, double> _revenueByInvoice = {};
@@ -44,72 +44,96 @@ class _BaoCaoScreenState extends State<BaoCaoScreen> with TickerProviderStateMix
   }
   
   Future<void> _loadData() async {
-    setState(() {
-      _isLoading = true;
-    });
-    
-    try {
-      final user = _auth.currentUser;
-      if (user == null) return;
-      
-      final userId = user.uid;
-      
-      print('DEBUG: Loading data for user: $userId');
-      
-      await _loadCompletedOrders(userId);
-      await _loadAllProducts(userId);
-      _calculateRevenueAndProfit();
-      
-    } catch (e) {
-      print('Error loading data: $e');
-    } finally {
-      setState(() {
-        _isLoading = false;
-      });
-    }
-  }
+  setState(() {
+    _isLoading = true;
+  });
   
-  Future<void> _loadCompletedOrders(String userId) async {
-    try {
-      print('DEBUG: Loading completed orders from: nguoidung/$userId/donhang/completed');
-      final snapshot = await _dbRef.child('nguoidung/$userId/donhang/completed').get();
+  try {
+    final user = _auth.currentUser;
+    if (user == null) return;
+    
+    final userId = user.uid;
+    
+    print('DEBUG: Loading data for user: $userId, showAllOrders: $_showAllOrders');
+    
+    await _loadOrders(userId);
+    await _loadAllProducts(userId);
+    _calculateRevenueAndProfit();
+    
+  } catch (e) {
+    print('Error loading data: $e');
+  } finally {
+    setState(() {
+      _isLoading = false;
+    });
+  }
+}
+  
+Future<void> _loadOrders(String userId) async {
+  try {
+    print('DEBUG: Loading orders for user: $userId, showAllOrders: $_showAllOrders');
+    List<OrderData> orders = [];
+    
+    // Load completed orders
+    print('DEBUG: Loading completed orders from: nguoidung/$userId/donhang/completed');
+    final completedSnapshot = await _dbRef.child('nguoidung/$userId/donhang/completed').get();
+    
+    if (completedSnapshot.exists) {
+      final Map<dynamic, dynamic> completedOrdersMap = completedSnapshot.value as Map<dynamic, dynamic>;
+      print('DEBUG: Found ${completedOrdersMap.length} completed orders');
       
-      if (snapshot.exists) {
-        final Map<dynamic, dynamic> ordersMap = snapshot.value as Map<dynamic, dynamic>;
-        final List<OrderData> orders = [];
+      completedOrdersMap.forEach((key, value) {
+        try {
+          print('DEBUG: Processing completed order key: $key');
+          final orderData = OrderData.fromMap(Map<String, dynamic>.from(value));
+          orders.add(orderData);
+          print('DEBUG: Successfully parsed completed order: ${orderData.orderId}');
+        } catch (e) {
+          print('Error parsing completed order $key: $e');
+          print('Raw value: $value');
+        }
+      });
+    } else {
+      print('DEBUG: No completed orders found');
+    }
+    
+    // Load saved orders if _showAllOrders is true
+    if (_showAllOrders) {
+      print('DEBUG: Loading saved orders from: nguoidung/$userId/donhang/saved');
+      final savedSnapshot = await _dbRef.child('nguoidung/$userId/donhang/saved').get();
+      
+      if (savedSnapshot.exists) {
+        final Map<dynamic, dynamic> savedOrdersMap = savedSnapshot.value as Map<dynamic, dynamic>;
+        print('DEBUG: Found ${savedOrdersMap.length} saved orders');
         
-        print('DEBUG: Found ${ordersMap.length} completed orders');
-        
-        ordersMap.forEach((key, value) {
+        savedOrdersMap.forEach((key, value) {
           try {
-            print('DEBUG: Processing order key: $key');
+            print('DEBUG: Processing saved order key: $key');
             final orderData = OrderData.fromMap(Map<String, dynamic>.from(value));
             orders.add(orderData);
-            print('DEBUG: Successfully parsed order: ${orderData.orderId}');
+            print('DEBUG: Successfully parsed saved order: ${orderData.orderId}');
           } catch (e) {
-            print('Error parsing order $key: $e');
+            print('Error parsing saved order $key: $e');
             print('Raw value: $value');
           }
         });
-        
-        setState(() {
-          _completedOrders = orders;
-        });
-        
-        print('DEBUG: Loaded ${orders.length} completed orders successfully');
       } else {
-        print('DEBUG: No completed orders found');
-        setState(() {
-          _completedOrders = [];
-        });
+        print('DEBUG: No saved orders found');
       }
-    } catch (e) {
-      print('Error loading completed orders: $e');
-      setState(() {
-        _completedOrders = [];
-      });
     }
+    
+    setState(() {
+      _completedOrders = orders;
+    });
+    
+    print('DEBUG: Loaded ${orders.length} orders successfully');
+  } catch (e) {
+    print('Error loading orders: $e');
+    setState(() {
+      _completedOrders = [];
+    });
   }
+}
   
   Future<void> _loadAllProducts(String userId) async {
     try {
@@ -482,14 +506,28 @@ class _BaoCaoScreenState extends State<BaoCaoScreen> with TickerProviderStateMix
     return Scaffold(
       appBar: AppBar(
         title: const Text('Báo cáo'),
+        
         backgroundColor: Theme.of(context).primaryColor,
         foregroundColor: Colors.white,
+        shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(
+          bottom: Radius.circular(15), // Điều chỉnh bán kính cong tùy ý
+        ),
+      ),
+
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadData,
-          ),
-        ],
+                  IconButton(
+                    icon: Icon(_showAllOrders ? Icons.all_inclusive : Icons.check_circle, color: Colors.white),
+                    tooltip: _showAllOrders ? 'Hiển thị chỉ đơn hoàn tất' : 'Hiển thị tất cả đơn',
+                    onPressed: () {
+                      setState(() {
+                        _showAllOrders = !_showAllOrders;
+                      });
+                      _loadData();
+                    },
+                  ),
+                  
+                ],
         bottom: TabBar(
           controller: _tabController,
           labelColor: const Color.fromARGB(255, 30, 154, 255),
@@ -511,6 +549,7 @@ class _BaoCaoScreenState extends State<BaoCaoScreen> with TickerProviderStateMix
           ],
         ),
       ),
+      
       body: Column(
         children: [
           Container(
@@ -716,45 +755,58 @@ class _BaoCaoScreenState extends State<BaoCaoScreen> with TickerProviderStateMix
             )
           else
             ListView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: filteredOrders.length,
-              itemBuilder: (context, index) {
-                final order = filteredOrders[index];
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: Theme.of(context).primaryColor,
-                      child: const Icon(Icons.receipt_long, color: Colors.white),
-                    ),
-                    title: Text('Đơn hàng: ${order.orderId}'),
-                    subtitle: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Khách hàng: ${order.customerName}'),
-                        Text('Ngày: ${DateFormat('dd/MM/yyyy HH:mm').format(order.orderDate)}'),
-                      ],
-                    ),
-                    trailing: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        const Text(
-                          'Doanh thu:',
-                          style: TextStyle(fontSize: 12, color: Colors.grey),
-                        ),
-                        Text(
-                          FormatCurrency.format(_revenueByInvoice[order.orderId] ?? 0),
-                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.green),
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: filteredOrders.length,
+                  itemBuilder: (context, index) {
+                    final order = filteredOrders[index];
+              return Container(
+                    margin: const EdgeInsets.only(bottom: 11),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.2), // Tăng độ đậm của màu bóng
+                          spreadRadius: 3,                      // Tăng độ lan rộng
+                          blurRadius: 4,                        // Tăng độ mờ
+                          offset: const Offset(1, 3),           // Di chuyển bóng xuống dưới
                         ),
                       ],
                     ),
-                    onTap: () => _showOrderDetails(order),
-                  ),
-                );
-              },
-            ),
+                      child: ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: Theme.of(context).primaryColor,
+                          child: const Icon(Icons.receipt_long, color: Colors.white),
+                        ),
+                        title: Text('Đơn hàng: ${order.orderId}'),
+                        subtitle: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Khách hàng: ${order.customerName}'),
+                            Text('Ngày: ${DateFormat('dd/MM/yyyy').format(order.orderDate)}'),
+                            Text('Trạng thái: ${order.status == OrderStatus.completed ? 'Hoàn tất' : 'Đã lưu'}'),
+                          ],
+                        ),
+                        trailing: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            const Text(
+                              'Doanh thu:',
+                              style: TextStyle(fontSize: 12, color: Colors.grey),
+                            ),
+                            Text(
+                              FormatCurrency.format(_revenueByInvoice[order.orderId] ?? 0),
+                              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.green),
+                            ),
+                          ],
+                        ),
+                        onTap: () => _showOrderDetails(order),
+                      ),
+                    );
+                  },
+                ),
         ],
       ),
     );
@@ -794,45 +846,64 @@ class _BaoCaoScreenState extends State<BaoCaoScreen> with TickerProviderStateMix
             )
           else
             ListView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: filteredOrders.length,
-              itemBuilder: (context, index) {
-                final order = filteredOrders[index];
-                final revenue = _revenueByInvoice[order.orderId] ?? 0;
-                
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  child: ListTile(
-                    leading: const CircleAvatar(
-                      backgroundColor: Colors.green,
-                      child: Icon(Icons.attach_money, color: Colors.white),
-                    ),
-                    title: Text('Hóa đơn: ${order.orderId}'),
-                    subtitle: Text('Khách hàng: ${order.customerName}'),
-                    trailing: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text(
-                          FormatCurrency.format(revenue),
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.green,
-                          ),
-                        ),
-                        Text(
-                          DateFormat('dd/MM/yyyy').format(order.orderDate),
-                          style: const TextStyle(fontSize: 12, color: Colors.grey),
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: filteredOrders.length,
+            itemBuilder: (context, index) {
+              final order = filteredOrders[index];
+              final revenue = _revenueByInvoice[order.orderId] ?? 0;
+              
+              return Container(
+                    margin: const EdgeInsets.only(bottom: 11),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.2), // Tăng độ đậm của màu bóng
+                          spreadRadius: 3,                      // Tăng độ lan rộng
+                          blurRadius: 4,                        // Tăng độ mờ
+                          offset: const Offset(1, 3),           // Di chuyển bóng xuống dưới
                         ),
                       ],
                     ),
-                    onTap: () => _showOrderDetails(order),
+                child: ListTile(
+                  leading: const CircleAvatar(
+                    backgroundColor: Colors.green,
+                    child: Icon(Icons.attach_money, color: Colors.white),
                   ),
-                );
-              },
-            ),
+                  title: Text('Hóa đơn: ${order.orderId}'),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Khách hàng: ${order.customerName}'),
+                      Text('Trạng thái: ${order.status == OrderStatus.completed ? 'Hoàn tất' : 'Đã lưu'}'),
+                    ],
+                  ),
+                  trailing: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        FormatCurrency.format(revenue),
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.green,
+                        ),
+                      ),
+                      Text(
+                        DateFormat('dd/MM/yyyy').format(order.orderDate),
+                        style: const TextStyle(fontSize: 12, color: Color.fromARGB(255, 152, 152, 152)),
+                      ),
+                      
+                    ],
+                  ),
+                  onTap: () => _showOrderDetails(order),
+                ),
+              );
+            },
+          ),
         ],
       ),
     );
@@ -880,8 +951,20 @@ class _BaoCaoScreenState extends State<BaoCaoScreen> with TickerProviderStateMix
                 final profit = _profitByInvoice[order.orderId] ?? 0;
                 final revenue = _revenueByInvoice[order.orderId] ?? 0;
                 
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 8),
+              return Container(
+                    margin: const EdgeInsets.only(bottom: 11),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.2), // Tăng độ đậm của màu bóng
+                          spreadRadius: 3,                      // Tăng độ lan rộng
+                          blurRadius: 4,                        // Tăng độ mờ
+                          offset: const Offset(1, 3),           // Di chuyển bóng xuống dưới
+                        ),
+                      ],
+                    ),
                   child: ListTile(
                     leading: CircleAvatar(
                       backgroundColor: profit >= 0 ? Colors.orange : Colors.red,
@@ -896,6 +979,7 @@ class _BaoCaoScreenState extends State<BaoCaoScreen> with TickerProviderStateMix
                       children: [
                         Text('Khách hàng: ${order.customerName}'),
                         Text('Doanh thu: ${FormatCurrency.format(revenue)}'),
+                        Text('Trạng thái: ${order.status == OrderStatus.completed ? 'Hoàn tất' : 'Đã lưu'}'),
                       ],
                     ),
                     trailing: Column(

@@ -1,3 +1,6 @@
+// lib/services/invoice_number_service.dart
+// (ĐÃ SỬA LỖI ĐỌC DỮ LIỆU BỊ LỖI/NULL)
+
 import 'package:firebase_database/firebase_database.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
@@ -20,17 +23,23 @@ class InvoiceNumberService {
     final day = now.day.toString().padLeft(2, '0');
     final dateKey = DateFormat('yyyyMMdd').format(now);
 
-    // Lấy counter hiện tại từ Firebase
-    final counterRef = _database.ref('nguoidung/${user.uid}/invoice_counters/$dateKey');
+    final counterRef =
+        _database.ref('nguoidung/${user.uid}/invoice_counters/$dateKey');
     final snapshot = await counterRef.get();
 
-    int currentCounter = 1;
-    if (snapshot.exists) {
-      final counterData = InvoiceCounter.fromMap(snapshot.value as Map<dynamic, dynamic>);
-      currentCounter = counterData.counter + 1;
-    }
+    int currentCounter = 1; // Mặc định là 1 nếu là ngày mới
 
-    // Cập nhật counter trong Firebase
+    // --- ✨ SỬA LỖI TẠI ĐÂY ---
+    // Đọc dữ liệu an toàn, bỏ qua fromMap để tránh lỗi 'Null' is not 'String'
+    if (snapshot.exists && snapshot.value is Map) {
+      final data = snapshot.value as Map<dynamic, dynamic>;
+      // Đọc 'counter' trực tiếp, nếu null hoặc lỗi thì dùng 0
+      final lastCounter = (data['counter'] as num?)?.toInt() ?? 0;
+      currentCounter = lastCounter + 1;
+    }
+    // --- KẾT THÚC SỬA LỖI ---
+
+    // Cập nhật counter trong Firebase (Dùng model để GHI vẫn an toàn)
     final newCounter = InvoiceCounter(dateKey: dateKey, counter: currentCounter);
     await counterRef.set(newCounter.toMap());
 
@@ -52,17 +61,21 @@ class InvoiceNumberService {
     final day = now.day.toString().padLeft(2, '0');
     final dateKey = DateFormat('yyyyMMdd').format(now);
 
-    // Lấy counter hiện tại từ Firebase
-    final counterRef = _database.ref('nguoidung/${user.uid}/invoice_counters/$dateKey');
+    final counterRef =
+        _database.ref('nguoidung/${user.uid}/invoice_counters/$dateKey');
     final snapshot = await counterRef.get();
 
-    int currentCounter = 0;
-    if (snapshot.exists) {
-      final counterData = InvoiceCounter.fromMap(snapshot.value as Map<dynamic, dynamic>);
-      currentCounter = counterData.counter;
-    }
+    int currentCounter = 0; // Mặc định là 0 (đơn tiếp theo là 1)
 
-    // Tạo số hóa đơn hiện tại
+    // --- ✨ SỬA LỖI TẠI ĐÂY ---
+    if (snapshot.exists && snapshot.value is Map) {
+      final data = snapshot.value as Map<dynamic, dynamic>;
+      // Đọc 'counter' trực tiếp, nếu null hoặc lỗi thì dùng 0
+      currentCounter = (data['counter'] as num?)?.toInt() ?? 0;
+    }
+    // --- KẾT THÚC SỬA LỖI ---
+
+    // Tạo số hóa đơn hiện tại (số tiếp theo)
     final sequenceNumber = (currentCounter + 1).toString().padLeft(4, '0');
     return '$yearSuffix$month${86}$day$sequenceNumber';
   }
@@ -77,18 +90,23 @@ class InvoiceNumberService {
     final now = DateTime.now();
     final dateKey = DateFormat('yyyyMMdd').format(now);
 
-    // Lấy counter hiện tại từ Firebase
-    final counterRef = _database.ref('nguoidung/${user.uid}/invoice_counters/$dateKey');
+    final counterRef =
+        _database.ref('nguoidung/${user.uid}/invoice_counters/$dateKey');
     final snapshot = await counterRef.get();
 
     int currentCounter = 0;
-    if (snapshot.exists) {
-      final counterData = InvoiceCounter.fromMap(snapshot.value as Map<dynamic, dynamic>);
-      currentCounter = counterData.counter;
+
+    // --- ✨ SỬA LỖI TẠI ĐÂY ---
+    if (snapshot.exists && snapshot.value is Map) {
+      final data = snapshot.value as Map<dynamic, dynamic>;
+      // Đọc 'counter' trực tiếp, nếu null hoặc lỗi thì dùng 0
+      currentCounter = (data['counter'] as num?)?.toInt() ?? 0;
     }
+    // --- KẾT THÚC SỬA LỖI ---
 
     // Tăng counter
-    final newCounter = InvoiceCounter(dateKey: dateKey, counter: currentCounter + 1);
+    final newCounter =
+        InvoiceCounter(dateKey: dateKey, counter: currentCounter + 1);
     await counterRef.set(newCounter.toMap());
   }
-} 
+}

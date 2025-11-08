@@ -2,9 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'dart:async';
+import 'dart:developer';
+import 'login_history_screen.dart';
 
 class CaNhanScreen extends StatefulWidget {
   const CaNhanScreen({super.key});
@@ -14,115 +15,314 @@ class CaNhanScreen extends StatefulWidget {
 }
 
 class _CaNhanScreenState extends State<CaNhanScreen> {
+  // Controllers
   final _hotenController = TextEditingController();
   final _sdtController = TextEditingController();
   final _diachiController = TextEditingController();
+
+  // User Data
   String? _email;
   String? _uid;
   bool _loading = true;
-  Timer? _debounce;
+  bool _isPhoneNumberVerified = false;
+  String _currentPhoneNumber = '';
 
+  // Firebase & Utils
   final _database = FirebaseDatabase.instance.ref();
   final _auth = FirebaseAuth.instance;
+  Timer? _debounce;
+  StreamSubscription<DatabaseEvent>? _userSubscription;
 
   @override
   void initState() {
     super.initState();
-    _loadOfflineData();
     _loadUserData();
+    _hotenController.addListener(() => _onTextChanged('hoten', _hotenController.text));
+    _sdtController.addListener(() => _onTextChanged('sdt', _sdtController.text));
+    _diachiController.addListener(() => _onTextChanged('diachi', _diachiController.text));
   }
 
-  Future<void> _loadOfflineData() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _hotenController.text = prefs.getString('hoten') ?? '';
-      _sdtController.text = prefs.getString('sdt') ?? '';
-      _diachiController.text = prefs.getString('diachi') ?? '';
-      _loading = false;
-    });
+  @override
+  void dispose() {
+    _userSubscription?.cancel();
+    _debounce?.cancel();
+    _hotenController.dispose();
+    _sdtController.dispose();
+    _diachiController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadUserData() async {
     final user = _auth.currentUser;
-    if (user == null) return;
-
-    setState(() {
-      _uid = user.uid;
-      _email = user.email;
-    });
-
-    final snapshot = await _database.child('nguoidung/$_uid/canhan').get();
-    if (snapshot.exists) {
-      final data = Map<String, dynamic>.from(snapshot.value as Map);
-      _hotenController.text = data['hoten'] ?? '';
-      _sdtController.text = data['sdt'] ?? '';
-      _diachiController.text = data['diachi'] ?? '';
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('hoten', _hotenController.text);
-      await prefs.setString('sdt', _sdtController.text);
-      await prefs.setString('diachi', _diachiController.text);
+    if (user == null) {
+      if (mounted) setState(() => _loading = false);
+      return;
     }
+
+    _uid = user.uid;
+    _email = user.email;
+    _checkVerificationStatus(user);
+
+    _userSubscription = _database.child('nguoidung/$_uid/canhan').onValue.listen(
+      (event) {
+        if (!mounted) return;
+        if (event.snapshot.exists) {
+          final data = Map<String, dynamic>.from(event.snapshot.value as Map);
+          _updateTextController(_hotenController, data['hoten']);
+          _updateTextController(_sdtController, data['sdt']);
+          _updateTextController(_diachiController, data['diachi']);
+          
+          if (_currentPhoneNumber != (data['sdt'] ?? '')) {
+            _currentPhoneNumber = data['sdt'] ?? '';
+            _checkVerificationStatus(user);
+          }
+        }
+        if (_loading) setState(() => _loading = false);
+      },
+      onError: (error) {
+        if (mounted) setState(() => _loading = false);
+        _showErrorSnackBar("Không thể tải dữ liệu: ${error.toString()}");
+      },
+    );
+  }
+
+  void _checkVerificationStatus(User? user) {
+    if (user == null) return;
+    // user.phoneNumber chứa số đã xác thực với Firebase Auth
+    // _currentPhoneNumber là số lưu trong Realtime Database
+    final verifiedPhoneNumber = user.phoneNumber;
+    final isVerified = verifiedPhoneNumber != null &&
+                       verifiedPhoneNumber.isNotEmpty &&
+                       _currentPhoneNumber.contains(verifiedPhoneNumber.substring(3)); // So sánh phần số (bỏ +84)
+
+    if (mounted && _isPhoneNumberVerified != isVerified) {
+      setState(() {
+        _isPhoneNumberVerified = isVerified;
+      });
+    }
+  }
+
+  // --- Logic xác thực số điện thoại ---
+
+  Future<void> _startPhoneVerification() async {
+    final phoneNumber = _sdtController.text.trim();
+    if (phoneNumber.length < 9) {
+      _showErrorSnackBar("Số điện thoại không hợp lệ");
+      return;
+    }
+
+    // Luôn thêm +84 vào đầu nếu chưa có
+    final fullPhoneNumber = phoneNumber.startsWith('+84') ? phoneNumber : '+84${phoneNumber.substring(1)}';
+    
+    _showLoadingDialog();
+
+    await _auth.verifyPhoneNumber(
+      phoneNumber: fullPhoneNumber,
+      verificationCompleted: (PhoneAuthCredential credential) async {
+        // Tự động xác thực (hiếm khi xảy ra trên máy thật)
+        await _auth.currentUser?.linkWithCredential(credential);
+        if (mounted) {
+          Navigator.pop(context); // Đóng loading
+          _showSuccessSnackBar("Xác thực thành công!");
+          setState(() => _isPhoneNumberVerified = true);
+        }
+      },
+      verificationFailed: (FirebaseAuthException e) {
+        if (mounted) Navigator.pop(context); // Đóng loading
+        _showErrorSnackBar("Xác thực thất bại: ${e.message}");
+        log("Lỗi Firebase Auth: ${e.code}");
+      },
+      codeSent: (String verificationId, int? resendToken) {
+        if (mounted) {
+          Navigator.pop(context); // Đóng loading
+          _showOtpDialog(verificationId);
+        }
+      },
+      codeAutoRetrievalTimeout: (String verificationId) {},
+    );
+  }
+
+  Future<void> _showOtpDialog(String verificationId) async {
+    final otpController = TextEditingController();
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('Nhập mã OTP', style: GoogleFonts.quicksand(fontWeight: FontWeight.bold)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Mã xác thực đã được gửi đến số điện thoại của bạn.'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: otpController,
+              keyboardType: TextInputType.number,
+              decoration: _inputDecoration("Nhập 6 chữ số OTP"),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Hủy")),
+          ElevatedButton(
+            onPressed: () async {
+              final credential = PhoneAuthProvider.credential(
+                verificationId: verificationId,
+                smsCode: otpController.text.trim(),
+              );
+              try {
+                await _auth.currentUser?.linkWithCredential(credential);
+                if(mounted) {
+                   Navigator.pop(context); // Đóng dialog OTP
+                  _showSuccessSnackBar("Xác thực thành công!");
+                   setState(() => _isPhoneNumberVerified = true);
+                }
+              } catch (e) {
+                 _showErrorSnackBar("Mã OTP không đúng hoặc đã hết hạn.");
+              }
+            },
+            child: Text('Xác nhận', style: GoogleFonts.roboto(color: Colors.white)),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade700)
+          ),
+        ],
+      ),
+    );
+  }
+
+
+  // --- Các hàm và widget khác (giữ nguyên từ trước) ---
+  // ... (Dán toàn bộ các hàm _updateTextController, _onTextChanged, _saveUserData, _copyToClipboard,
+  //      _reauthenticate, _showMessageDialog, _showLoadingDialog, _forgotPassword,
+  //      _startChangePassword, _showNewPasswordDialog, _inputDecoration, v.v... vào đây)
+
+  void _updateTextController(TextEditingController controller, String? newText) {
+    if (newText != null && controller.text != newText) {
+      final currentSelection = controller.selection;
+      controller.text = newText;
+      try {
+         controller.selection = currentSelection;
+      } catch (e) {
+        // Bỏ qua lỗi
+      }
+    }
+  }
+
+  void _onTextChanged(String field, String value) {
+    if (_debounce?.isActive ?? false) _debounce!.cancel();
+    _debounce = Timer(const Duration(milliseconds: 700), () {
+      _saveUserData(field, value);
+    });
   }
 
   Future<void> _saveUserData(String field, String value) async {
     if (_uid == null || !mounted) return;
     try {
       await _database.child('nguoidung/$_uid/canhan').update({field: value.trim()});
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(field, value.trim());
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Đã cập nhật $field', style: GoogleFonts.inter(fontWeight: FontWeight.w500, color: Colors.white)),
-            backgroundColor: Colors.green.shade700,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            margin: const EdgeInsets.all(16),
-            duration: const Duration(seconds: 1),
-          ),
-        );
-      }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Lỗi khi cập nhật $field: $e', style: GoogleFonts.inter(fontWeight: FontWeight.w500, color: Colors.white)),
-            backgroundColor: Colors.red.shade700,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            margin: const EdgeInsets.all(16),
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      }
+      _showErrorSnackBar('Lỗi khi cập nhật: $e');
     }
   }
 
-  void _debounceSave(String field, String value) {
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 1000), () {
-      if (field == 'sdt' && value.length < 10) return;
-      if (value.isNotEmpty) _saveUserData(field, value);
-    });
+  void _copyToClipboard(String text, String label) {
+    if (text.isEmpty) return;
+    Clipboard.setData(ClipboardData(text: text));
+    _showSuccessSnackBar('Đã sao chép $label');
   }
 
-  void _copyToClipboard(String text, String label) {
+  void _showSuccessSnackBar(String message) {
     if (!mounted) return;
-    Clipboard.setData(ClipboardData(text: text));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Đã sao chép $label vào bộ nhớ tạm', style: GoogleFonts.inter(fontWeight: FontWeight.w500, color: Colors.white)),
-        backgroundColor: Colors.green.shade700,
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(message, style: GoogleFonts.roboto(fontWeight: FontWeight.w500)),
+      backgroundColor: Colors.green.shade700,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      duration: const Duration(seconds: 2),
+    ));
+  }
+  
+  void _showErrorSnackBar(String message) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(message, style: GoogleFonts.roboto(fontWeight: FontWeight.w500)),
+        backgroundColor: Colors.red.shade700,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        margin: const EdgeInsets.all(16),
-        duration: const Duration(seconds: 1),
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        duration: const Duration(seconds: 3),
+      ));
+  }
+
+  InputDecoration _inputDecoration(String hint) => InputDecoration(
+        hintText: hint,
+        hintStyle: GoogleFonts.roboto(color: Colors.grey.shade500, fontWeight: FontWeight.w400),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: Colors.grey.shade200, width: 1)),
+        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFF3B82F6), width: 1.5)),
+        filled: true,
+        fillColor: Colors.white,
+      );
+
+  Widget _buildSectionCard({required String title, required List<Widget> children}) {
+    return Card(
+      elevation: 2.0,
+      margin: const EdgeInsets.symmetric(vertical: 10),
+      shadowColor: Colors.blue.shade50,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(8.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(left: 16, top: 16, bottom: 8),
+              child: Text(
+                title,
+                style: GoogleFonts.quicksand(fontWeight: FontWeight.w900, fontSize: 18, color: const Color(0xFF3B82F6)),
+              ),
+            ),
+            ...children,
+          ],
+        ),
       ),
     );
   }
 
-  Future<bool> _reauthenticate(String password) async {
+  Widget _buildInfoTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    VoidCallback? onCopy,
+  }) {
+    return ListTile(
+      leading: Icon(icon, color: const Color(0xFF3B82F6)),
+      title: Text(title, style: GoogleFonts.roboto(fontWeight: FontWeight.w600, color: Colors.grey.shade800)),
+      subtitle: Text(subtitle, style: GoogleFonts.roboto(fontSize: 15, color: Colors.black54)),
+      trailing: onCopy != null 
+        ? IconButton(icon: const Icon(Icons.copy_outlined, size: 20, color: Colors.grey), onPressed: onCopy)
+        : null,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+    );
+  }
+
+  Widget _buildActionTile({
+    required IconData icon,
+    required String title,
+    required VoidCallback onTap,
+  }) {
+    return ListTile(
+      leading: Icon(icon, color: const Color(0xFF3B82F6)),
+      title: Text(title, style: GoogleFonts.roboto(fontWeight: FontWeight.w600, color: Colors.grey.shade800)),
+      trailing: const Icon(Icons.chevron_right, color: Colors.grey),
+      onTap: onTap,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+    );
+  }
+
+  // ... (Thêm lại các hàm mật khẩu nếu bạn đã xóa chúng)
+   Future<bool> _reauthenticate(String password) async {
     try {
       final user = _auth.currentUser;
       if (user == null || user.email == null) return false;
@@ -145,12 +345,12 @@ class _CaNhanScreenState extends State<CaNhanScreen> {
       context: context,
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text(title, style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 18, color: titleColor)),
-        content: Text(message, style: GoogleFonts.inter(fontSize: 16)),
+        title: Text(title, style: GoogleFonts.roboto(fontWeight: FontWeight.bold, fontSize: 18, color: titleColor)),
+        content: Text(message, style: GoogleFonts.roboto(fontSize: 16)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: Text('Đóng', style: GoogleFonts.inter(color: const Color(0xFF3B82F6))),
+            child: Text('Đóng', style: GoogleFonts.roboto(color: const Color(0xFF3B82F6))),
           ),
         ],
       ),
@@ -186,13 +386,13 @@ class _CaNhanScreenState extends State<CaNhanScreen> {
       builder: (dialogContext) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Text('Xác nhận Quên Mật Khẩu',
-            style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 18)),
+            style: GoogleFonts.roboto(fontWeight: FontWeight.bold, fontSize: 18)),
         content: Text('Bạn có chắc chắn muốn gửi email đặt lại mật khẩu đến $_email không?',
-            style: GoogleFonts.inter(fontSize: 16)),
+            style: GoogleFonts.roboto(fontSize: 16)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, false),
-            child: Text('Hủy', style: GoogleFonts.inter(color: Colors.grey.shade600)),
+            child: Text('Hủy', style: GoogleFonts.roboto(color: Colors.grey.shade600)),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(dialogContext, true),
@@ -200,7 +400,7 @@ class _CaNhanScreenState extends State<CaNhanScreen> {
               backgroundColor: Colors.orange.shade600,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
-            child: Text('Xác nhận', style: GoogleFonts.inter(color: Colors.white)),
+            child: Text('Xác nhận', style: GoogleFonts.roboto(color: Colors.white)),
           ),
         ],
       ),
@@ -241,7 +441,7 @@ class _CaNhanScreenState extends State<CaNhanScreen> {
         builder: (context, setDialogState) => AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           title: Text('Xác thực Mật khẩu Hiện tại',
-              style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 20)),
+              style: GoogleFonts.roboto(fontWeight: FontWeight.bold, fontSize: 20)),
           content: TextField(
             controller: currentPasswordController,
             decoration: _inputDecoration('Nhập mật khẩu hiện tại').copyWith(
@@ -255,7 +455,7 @@ class _CaNhanScreenState extends State<CaNhanScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialogContext),
-              child: Text('Hủy', style: GoogleFonts.inter(color: Colors.grey.shade600)),
+              child: Text('Hủy', style: GoogleFonts.roboto(color: Colors.grey.shade600)),
             ),
             ElevatedButton(
               onPressed: () async {
@@ -277,7 +477,7 @@ class _CaNhanScreenState extends State<CaNhanScreen> {
                 backgroundColor: const Color(0xFF3B82F6),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
-              child: Text('Tiếp tục', style: GoogleFonts.inter(color: Colors.white)),
+              child: Text('Tiếp tục', style: GoogleFonts.roboto(color: Colors.white)),
             ),
           ],
         ),
@@ -311,13 +511,13 @@ class _CaNhanScreenState extends State<CaNhanScreen> {
         builder: (context, setDialogState) => AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           title: Text('Đặt Mật khẩu Mới',
-              style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 20)),
+              style: GoogleFonts.roboto(fontWeight: FontWeight.bold, fontSize: 20)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text('Yêu cầu: Mật khẩu tối thiểu 6 ký tự',
-                  style: GoogleFonts.inter(fontSize: 14, color: Colors.grey.shade600)),
+                  style: GoogleFonts.roboto(fontSize: 14, color: Colors.grey.shade600)),
               const SizedBox(height: 16),
               TextField(
                 controller: newPasswordController,
@@ -361,7 +561,7 @@ class _CaNhanScreenState extends State<CaNhanScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialogContext),
-              child: Text('Hủy', style: GoogleFonts.inter(color: Colors.grey.shade600)),
+              child: Text('Hủy', style: GoogleFonts.roboto(color: Colors.grey.shade600)),
             ),
             ElevatedButton(
               onPressed: (minLengthMet && passwordsMatch)
@@ -394,220 +594,146 @@ class _CaNhanScreenState extends State<CaNhanScreen> {
                 backgroundColor: const Color(0xFF3B82F6),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
-              child: Text('Xác nhận', style: GoogleFonts.inter(color: Colors.white)),
+              child: Text('Xác nhận', style: GoogleFonts.roboto(color: Colors.white)),
             ),
           ],
         ),
       ),
     );
   }
-
-  InputDecoration _inputDecoration(String hint) => InputDecoration(
-        hintText: hint,
-        hintStyle: GoogleFonts.inter(color: Colors.grey.shade500, fontWeight: FontWeight.w400),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: Colors.grey.shade300, width: 1)),
-        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFF3B82F6), width: 1.5)),
-        filled: true,
-        fillColor: Colors.grey.shade50,
-      );
-
-  Widget _buildTextField({
-    required TextEditingController controller,
-    required String label,
-    required String hint,
-    required String fieldName,
-    TextInputType? keyboardType,
-  }) =>
-      _buildLabeledField(
-        label: label,
-        child: TextField(
-          controller: controller,
-          keyboardType: keyboardType,
-          textInputAction: TextInputAction.next,
-          inputFormatters: fieldName == 'sdt' ? [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(15)] : null,
-          decoration: _inputDecoration(hint).copyWith(
-            suffixIcon: Icon(
-              Icons.check_circle_outline,
-              color: controller.text.isNotEmpty && (fieldName != 'sdt' || controller.text.length >= 10) ? Colors.green.shade600 : Colors.grey.shade400,
-              size: 18,
-            ),
-          ),
-          style: GoogleFonts.inter(fontSize: 15, color: Colors.black87, fontWeight: FontWeight.w400),
-          onChanged: (value) => _debounceSave(fieldName, value),
-        ),
-      );
-
-  Widget _buildLabeledField({
-    required String label,
-    required Widget child,
-    EdgeInsetsGeometry? margin,
-  }) =>
-      Container(
-        margin: margin ?? const EdgeInsets.symmetric(vertical: 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(label, style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 15, color: Colors.black87)),
-            const SizedBox(height: 6),
-            child,
-          ],
-        ),
-      );
-
-  Widget _buildInfoDisplay({
-    required IconData icon,
-    required String label,
-    required String value,
-    Widget? actionButton,
-    List<Widget>? actionButtonsBelow,
-  }) =>
-      _buildLabeledField(
-        label: label,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.grey.shade300),
-                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8, offset: const Offset(0, 2))],
-              ),
-              child: Row(
-                children: [
-                  Icon(icon, color: Colors.blueGrey.shade700, size: 22),
-                  const SizedBox(width: 12),
-                  Expanded(child: Text(value, style: GoogleFonts.inter(fontSize: 15, color: Colors.black87, fontWeight: FontWeight.w400))),
-                  if (actionButton != null) ...[const SizedBox(width: 8), actionButton],
-                ],
-              ),
-            ),
-            if (actionButtonsBelow != null) ...[
-              const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: actionButtonsBelow,
-              ),
-            ],
-          ],
-        ),
-      );
-
-  Widget _buildSectionTitle(String title) => Padding(
-        padding: const EdgeInsets.only(top: 24, bottom: 12),
-        child: Text(
-          title,
-          style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.black87),
-        ),
-      );
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey.shade50,
+      backgroundColor: Colors.grey.shade100,
       appBar: AppBar(
-        title: Text(
-          'Thông Tin Cá Nhân',
-          style: GoogleFonts.inter(fontWeight: FontWeight.w700, fontSize: 20, color: Colors.white),
-        ),
-        backgroundColor: Colors.transparent,
+        title: Text('Thông Tin Cá Nhân', style: GoogleFonts.quicksand(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 22)),
+        backgroundColor: const Color(0xFF3B82F6),
         elevation: 0,
-        flexibleSpace: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(colors: [const Color(0xFF3B82F6), Colors.blue.shade700], begin: Alignment.topLeft, end: Alignment.bottomRight),
-          ),
-        ),
-        leading: IconButton(icon: const Icon(Icons.arrow_back_ios, color: Colors.white, size: 20), onPressed: () => Navigator.pop(context)),
+        systemOverlayStyle: SystemUiOverlayStyle.light,
+          iconTheme: const IconThemeData(
+    color: Colors.white, // Thêm dòng này
+  ),
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator(color: Color(0xFF3B82F6)))
-          : SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildSectionTitle('Thông tin Người dùng'),
-                  Card(
-                    elevation: 2,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        children: [
-                          _buildTextField(controller: _hotenController, label: 'Họ và Tên', hint: 'Nhập họ và tên', fieldName: 'hoten'),
-                          _buildTextField(
-                              controller: _sdtController, label: 'Số Điện Thoại', hint: 'Nhập số điện thoại', fieldName: 'sdt', keyboardType: TextInputType.phone),
-                          _buildTextField(controller: _diachiController, label: 'Địa Chỉ', hint: 'Nhập địa chỉ', fieldName: 'diachi'),
-                        ],
-                      ),
-                    ),
-                  ),
-                  _buildSectionTitle('Thông tin Tài khoản'),
-                  Card(
-                    elevation: 2,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        children: [
-                          _buildInfoDisplay(
-                            icon: Icons.email_outlined,
-                            label: 'Email',
-                            value: _email ?? 'Chưa có email',
-                            actionButton: IconButton(
-                              onPressed: () => _copyToClipboard(_email ?? '', 'Email'),
-                              icon: const Icon(Icons.content_copy, color: Color(0xFF3B82F6), size: 18),
-                              tooltip: 'Sao chép Email',
-                            ),
-                          ),
-                          _buildInfoDisplay(
-                            icon: Icons.perm_identity_outlined,
-                            label: 'UID',
-                            value: _uid ?? 'Chưa có UID',
-                            actionButton: IconButton(
-                              onPressed: () => _copyToClipboard(_uid ?? '', 'UID'),
-                              icon: const Icon(Icons.content_copy, color: Color(0xFF3B82F6), size: 18),
-                              tooltip: 'Sao chép UID',
-                            ),
-                          ),
-                          _buildInfoDisplay(
-                            icon: Icons.lock_outline,
-                            label: 'Mật Khẩu',
-                            value: '••••••••',
-                            actionButtonsBelow: [
-                              ElevatedButton.icon(
-                                onPressed: _startChangePassword,
-                                icon: const Icon(Icons.edit, size: 16, color: Colors.white),
-                                label: Text('Đổi mật khẩu', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w500)),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: const Color(0xFF3B82F6),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                  elevation: 2,
+          : GestureDetector(
+              onTap: () => FocusScope.of(context).unfocus(),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    _buildSectionCard(
+                      title: 'Thông tin liên hệ',
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // --- HỌ VÀ TÊN ---
+                              Text("Họ và Tên", style: GoogleFonts.roboto(fontWeight: FontWeight.w600, fontSize: 15, color: Colors.grey.shade800)),
+                              const SizedBox(height: 8),
+                              TextField(
+                                controller: _hotenController,
+                                decoration: _inputDecoration("Nhập họ và tên").copyWith(prefixIcon: const Icon(Icons.person_outline)),
+                              ),
+                              const SizedBox(height: 16),
+
+                              // --- SỐ ĐIỆN THOẠI VÀ NÚT XÁC THỰC ---
+                              Text("Số Điện Thoại", style: GoogleFonts.roboto(fontWeight: FontWeight.w600, fontSize: 15, color: Colors.grey.shade800)),
+                              const SizedBox(height: 8),
+                              TextField(
+                                controller: _sdtController,
+                                keyboardType: TextInputType.phone,
+                                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                                decoration: _inputDecoration("Nhập số điện thoại").copyWith(
+                                  prefixIcon: const Icon(Icons.phone_outlined),
+                                  suffixIcon: Padding(
+                                    padding: const EdgeInsets.only(right: 8.0),
+                                    child: _isPhoneNumberVerified
+                                      ? const Icon(Icons.check_circle, color: Colors.green, key: ValueKey('verified'))
+                                      : TextButton(
+                                          onPressed: _startPhoneVerification,
+                                          child: const Text("Xác thực"),
+                                          style: TextButton.styleFrom(foregroundColor: Colors.orange.shade800),
+                                          key: const ValueKey('verify'),
+                                        ),
+                                  ),
                                 ),
                               ),
-                              const SizedBox(width: 8),
-                              ElevatedButton.icon(
-                                onPressed: _forgotPassword,
-                                icon: const Icon(Icons.help, size: 16, color: Colors.white),
-                                label: Text('Quên mật khẩu', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w500)),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.orange.shade600,
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                  elevation: 2,
-                                ),
+                              const SizedBox(height: 16),
+
+                              // --- ĐỊA CHỈ ---
+                              Text("Địa chỉ", style: GoogleFonts.roboto(fontWeight: FontWeight.w600, fontSize: 15, color: Colors.grey.shade800)),
+                              const SizedBox(height: 8),
+                              TextField(
+                                controller: _diachiController,
+                                decoration: _inputDecoration("Nhập địa chỉ").copyWith(prefixIcon: const Icon(Icons.location_on_outlined)),
                               ),
                             ],
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                  ),
-                ],
+
+                    _buildSectionCard(
+                      title: 'Tài khoản & Bảo mật',
+                      children: [
+                        _buildInfoTile(
+                          icon: Icons.email_outlined,
+                          title: 'Email',
+                          subtitle: _email ?? 'Không có',
+                          onCopy: () => _copyToClipboard(_email ?? '', 'Email'),
+                        ),
+                        const Divider(height: 1, indent: 16, endIndent: 16),
+                         _buildInfoTile(
+                          icon: Icons.badge_outlined,
+                          title: 'User ID',
+                          subtitle: _uid ?? 'Không có',
+                          onCopy: () => _copyToClipboard(_uid ?? '', 'User ID'),
+                        ),
+                        const Divider(height: 1, indent: 16, endIndent: 16),
+                        _buildActionTile(
+                          icon: Icons.history_outlined,
+                          title: 'Lịch sử đăng nhập',
+                          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginHistoryScreen())),
+                        ),
+                      ],
+                    ),
+                    
+                    const SizedBox(height: 20),
+                    
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            icon: const Icon(Icons.lock_reset_outlined),
+                            label: const Text('Đổi Mật Khẩu'),
+                            onPressed: _startChangePassword,
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: const Color(0xFF3B82F6), side: const BorderSide(color: Color(0xFF3B82F6)),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            icon: const Icon(Icons.help_outline),
+                            label: const Text('Quên Mật Khẩu'),
+                            onPressed: _forgotPassword,
+                             style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.orange.shade700, side: BorderSide(color: Colors.orange.shade700),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                  ],
+                ),
               ),
             ),
     );

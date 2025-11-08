@@ -10,6 +10,11 @@ import 'dangnhap.dart';
 import 'trangchu.dart';
 import 'dart:developer';
 import 'dart:io';
+import 'package:google_fonts/google_fonts.dart'; // Thêm dòng này
+import 'dart:convert'; // Đảm bảo import này có trong file splash.dart
+import 'dart:async';
+import 'package:intl/date_symbol_data_local.dart'; // ✨ THÊM DÒNG NÀY
+import 'package:flutter/foundation.dart' show kIsWeb; // ✨ THÊM DÒNG NÀY
 
 // Preload critical data before app starts
 class AppInitializer {
@@ -56,17 +61,18 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
   late AnimationController _controller;
   late Animation<double> _scaleAnimation;
   late Animation<double> _fadeAnimation;
+  
   double _progress = 0.0;
   String _loadingText = 'Kiểm tra kết nối mạng...';
   bool _isInitialized = false;
-
+  bool _dataLoaded = false;
   final PrinterService _printerService = PrinterService();
 
   @override
   void initState() {
     super.initState();
     _controller = AnimationController(
-      duration: const Duration(milliseconds: 800),
+      duration: const Duration(milliseconds: 900),
       vsync: this,
     );
 
@@ -80,8 +86,148 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _controller.forward();
-      _initializeApp(); // Thay thế bằng hàm khởi tạo chính
+      _runInitialization(); // ✨ 1. Gọi hàm khởi tạo thật
     });
+  }
+    void _updateLoadingText(String text) {
+    if (mounted) {
+      setState(() {
+        _loadingText = text;
+      });
+    }
+  }
+
+  // Hàm mới để bắt đầu quá trình tải mượt mà
+  void _startSmoothLoading() {
+    // Bắt đầu tải dữ liệu thực tế trong nền
+    _initializeApp().then((_) {
+      // Đánh dấu là dữ liệu đã tải xong
+      _dataLoaded = true;
+    });
+
+    // Tạo một Timer để cập nhật thanh progress một cách mượt mà
+    const totalDuration = Duration(milliseconds: 1500); // Giả lập quá trình tải trong 3 giây
+    const updateInterval = Duration(milliseconds: 50);
+    int steps = (totalDuration.inMilliseconds / updateInterval.inMilliseconds).round();
+    double stepValue = 1.0 / steps;
+    int currentStep = 0;
+
+    Timer.periodic(updateInterval, (timer) {
+      if (mounted) {
+        setState(() {
+          _progress += stepValue;
+          if (_progress >= 1.0) {
+            _progress = 1.0;
+          }
+        });
+
+        // Cập nhật text dựa trên tiến trình
+        if (_progress < 0.3) {
+           _updateLoadingText('Kiểm tra kết nối...');
+        } else if (_progress < 0.6) {
+           _updateLoadingText('Xác thực người dùng...');
+        } else if (_progress < 0.9) {
+           _updateLoadingText('Đang tải dữ liệu...');
+        } else {
+           _updateLoadingText('Hoàn tất!');
+        }
+        
+        currentStep++;
+        if (currentStep >= steps) {
+          timer.cancel();
+          // Khi timer chạy xong, kiểm tra xem dữ liệu đã tải xong chưa để chuyển trang
+          _navigateToNextScreen();
+        }
+      } else {
+        timer.cancel();
+      }
+    });
+  }
+
+// Hàm mới: Quản lý toàn bộ quá trình
+Future<void> _runInitialization() async {
+  // Reset trạng thái (quan trọng cho nút "Thử lại")
+  _updateLoadingText('Kiểm tra kết nối...');
+  _updateProgress(0.0, 'Kiểm tra kết nối...');
+  
+  try {
+    // ✨ 2. Khởi tạo Locale
+    await initializeDateFormatting('vi_VN', null);
+    _updateProgress(0.2, 'Đang kết nối...');
+
+    // ✨ 3. Kiểm tra mạng
+    final connectivityResult = await Connectivity().checkConnectivity();
+    if (connectivityResult == ConnectivityResult.none || !await _hasInternet()) {
+      // Nếu không có mạng, hiện popup và dừng lại
+      _showNetworkErrorPopup(); 
+      return; 
+    }
+    _updateProgress(0.4, 'Đã kết nối!');
+
+    // ✨ 4. Kiểm tra xác thực
+    _updateProgress(0.6, 'Xác thực người dùng...');
+    final prefs = await SharedPreferences.getInstance();
+    final authService = AuthService();
+    final user = authService.getCurrentUser();
+    final rememberMe = prefs.getBool('rememberMe') ?? false;
+
+    Widget nextScreen; // Dùng biến cục bộ, không dùng _initialScreen nữa
+
+    if (user != null && rememberMe) {
+      _updateProgress(0.8, 'Kiểm tra quyền truy cập...');
+      final bool? isEnabledInDb = await authService.isUserEnabled(user.uid);
+      
+      if (isEnabledInDb == false) {
+        await authService.signOut();
+        nextScreen = DangNhapScreen();
+      } else {
+        // ✨ GỌI AppInitializer TẠI ĐÂY (nếu bạn chưa gọi ở main.dart)
+        // await AppInitializer.preloadData(); 
+        nextScreen = const TrangChuScreen();
+      }
+    } else {
+      nextScreen = DangNhapScreen();
+    }
+    
+    // ✨ 5. Hoàn tất và Điều hướng
+    _updateProgress(1.0, 'Hoàn tất!');
+    await Future.delayed(const Duration(milliseconds: 300)); // Chờ 0.3s để người dùng thấy chữ "Hoàn tất"
+
+    if (mounted) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => nextScreen),
+      );
+    }
+
+  } catch (e) {
+    log('Splash: Lỗi khởi tạo ứng dụng: $e');
+    // Nếu có lỗi bất kỳ, hiện popup
+    _showNetworkErrorPopup();
+  }
+}
+
+
+  // Hàm mới để điều hướng, đảm bảo cả timer và data loading đều xong
+  Future<void> _navigateToNextScreen() async {
+    // Đợi cho đến khi dữ liệu thực sự được tải xong
+    while (!_dataLoaded) {
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
+
+    // Đảm bảo thanh progress đã đầy 100%
+    if (mounted) {
+        setState(() {
+           _progress = 1.0;
+           _loadingText = 'Hoàn tất!';
+        });
+    }
+    
+    await Future.delayed(const Duration(milliseconds: 300));
+    if (mounted) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => _initialScreen),
+      );
+    }
   }
 
   void _updateProgress(double progress, String text) {
@@ -141,7 +287,7 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
                   onPressed: () {
                     Navigator.of(context).pop();
                     // Thay đổi tên hàm từ _checkNetworkAndInitialize() thành _initializeApp()
-                    _initializeApp();
+                    _runInitialization();
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF1976D2),
@@ -162,6 +308,9 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
   }
 
 Future<bool> _hasInternet() async {
+  if (kIsWeb) {
+    return true; // Nếu là Web, mặc định là có mạng
+  }
   try {
     // Thử phân giải DNS: nếu không có internet sẽ ném SocketException
     final result = await InternetAddress.lookup('example.com');
@@ -180,250 +329,47 @@ Future<bool> _hasInternet() async {
 }
 
 
-  Future<void> _initializeApp() async {
+// VỊ TRÍ: lib/screens/splash.dart -> trong class _SplashScreenState
+
+Future<void> _initializeApp() async {
   try {
- _updateProgress(0.2, 'Kiểm tra kết nối mạng...');
+    // ✨ KHỞI TẠO LOCALE NGAY TẠI ĐÂY ✨
+    // Tác vụ này rất nhanh và sẽ không ảnh hưởng đến hiệu suất.
+    await initializeDateFormatting('vi_VN', null);
 
-// 1) Có Wi-Fi/4G không?
-final connectivityResult = await Connectivity().checkConnectivity();
-final hasInterface = connectivityResult != ConnectivityResult.none;
+    final connectivityResult = await Connectivity().checkConnectivity();
+    if (connectivityResult == ConnectivityResult.none || !await _hasInternet()) {
+      if (mounted) _showNetworkErrorPopup();
+      return; 
+    }
 
-// 2) Có internet thật không?
-final hasInternet = await _hasInternet();
+    final prefs = await SharedPreferences.getInstance();
+    final authService = AuthService();
+    final user = authService.getCurrentUser();
+    final rememberMe = prefs.getBool('rememberMe') ?? false;
 
-if (!hasInterface || !hasInternet) {
-  _showNetworkErrorPopup();
-  return; // Dừng mọi tải dữ liệu tiếp theo
-}
-    // (Thêm một độ trễ nhỏ để người dùng nhìn thấy)
-    await Future.delayed(const Duration(milliseconds: 100)); 
-
-      _updateProgress(0.3, 'Kiểm tra đăng nhập...');
-      final prefs = await SharedPreferences.getInstance();
-      final authService = AuthService();
-      final user = authService.getCurrentUser();
-
-      String tenCuaHang = AppInitializer.tenCuaHang;
-      Map<String, dynamic> reportData = {
-        'orderCount': 0,
-        'totalRevenue': 0.0,
-        'draftOrderCount': 0,
-        'savedOrderCount': 0,
-        'revenuePercentageChange': 0.0,
-        'orderPercentageChange': 0.0,
-      };
-      DateTime selectedDate = DateTime.now();
-
-      _updateProgress(0.4, 'Xác thực phiên làm việc...');
-      final rememberMe = prefs.getBool('rememberMe') ?? false;
-
-      if (user != null && rememberMe) {
-        _updateProgress(0.6, 'Kiểm tra trạng thái tài khoản...');
-        try {
-          final bool? isEnabledInDb = await authService.isUserEnabled(user.uid);
-          if (isEnabledInDb != null && isEnabledInDb == false) {
-            log('Splash: Tài khoản bị vô hiệu hóa trong DB. Buộc đăng xuất.');
-            await authService.signOut();
-            _initialScreen = DangNhapScreen();
-          } else {
-            _updateProgress(0.8, 'Tải dữ liệu...');
-            final results = await Future.wait([
-              _tryReconnectPrinter(user.uid),
-              _loadQuickReportData(user.uid, selectedDate),
-              AppInitializer.preloadData(),
-            ]);
-
-            reportData = results[1] as Map<String, dynamic>;
-            tenCuaHang = AppInitializer.tenCuaHang;
-
-            _initialScreen = TrangChuScreen(
-              initialData: {
-                'tenCuaHang': tenCuaHang,
-                'orderCount': reportData['orderCount'],
-                'totalRevenue': reportData['totalRevenue'],
-                'draftOrderCount': reportData['draftOrderCount'],
-                'savedOrderCount': reportData['savedOrderCount'],
-                'revenuePercentageChange': reportData['revenuePercentageChange'],
-                'orderPercentageChange': reportData['orderPercentageChange'],
-                'selectedDate': selectedDate,
-              },
-            );
-          }
-        } on FirebaseAuthException catch (e) {
-          log('Splash: Lỗi Firebase: ${e.message}');
-          if (e.code == 'network-request-failed') {
-            _updateProgress(0.0, 'Không có kết nối mạng...');
-            _showNetworkErrorPopup();
-            return;
-          }
-          await authService.signOut();
-          _initialScreen = DangNhapScreen();
-        } catch (e) {
-          log('Splash: Lỗi không xác định: $e');
-          _initialScreen = DangNhapScreen();
-        }
-      } else {
-        log("Splash: Không có user hoặc chưa bật lưu thông tin. Đăng nhập.");
+    if (user != null && rememberMe) {
+      final bool? isEnabledInDb = await authService.isUserEnabled(user.uid);
+      if (isEnabledInDb == false) {
+        await authService.signOut();
         _initialScreen = DangNhapScreen();
+      } else {
+_initialScreen = const TrangChuScreen();
       }
-
-      _updateProgress(0.95, 'Tối ưu kết nối...');
-      await _preWarmFirebaseConnections(user?.uid);
-
-      _updateProgress(1.0, 'Hoàn tất!');
-      if (mounted) {
-        setState(() {
-          _isInitialized = true;
-        });
-        await Future.delayed(const Duration(milliseconds: 500));
-        if (mounted) {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (_) => _initialScreen),
-          );
-        }
-      }
-    } catch (e) {
-      log('Splash: Lỗi khởi tạo ứng dụng: $e');
-      _updateProgress(0.0, 'Không có kết nối mạng...');
+    } else {
+      _initialScreen = DangNhapScreen();
+    }
+  } catch (e) {
+    log('Splash: Lỗi khởi tạo ứng dụng: $e');
+    _initialScreen = DangNhapScreen();
+    if (mounted) {
       _showNetworkErrorPopup();
     }
+  } finally {
+      // ...
   }
+}
 
-  Future<void> _tryReconnectPrinter(String userId) async {
-    try {
-      final ref = FirebaseDatabase.instance.ref('nguoidung/$userId/mayin');
-      final snapshot = await ref.get();
-      if (snapshot.exists) {
-        final data = snapshot.value as Map<dynamic, dynamic>;
-        final printerName = data['name'] as String?;
-        if (printerName != null) {
-          await _printerService.reconnectBluetoothPrinter(printerName);
-        }
-      }
-    } catch (e) {
-      log('Splash: Lỗi kết nối máy in: $e');
-    }
-  }
-
-  Future<Map<String, dynamic>> _loadQuickReportData(String userId, DateTime date) async {
-    int totalOrderCount = 0;
-    double totalRevenue = 0.0;
-    int draftOrderCount = 0;
-    int savedOrderCount = 0;
-    double revenuePercentageChange = 0.0;
-    double orderPercentageChange = 0.0;
-
-    final dbRef = FirebaseDatabase.instance.ref();
-    final previousDate = date.subtract(const Duration(days: 1));
-
-    try {
-      final snapshot = await dbRef.child('nguoidung/$userId/donhang').get();
-      final ordersMap = snapshot.exists ? snapshot.value as Map<dynamic, dynamic> : {};
-
-      for (var status in ['completed', 'saved']) {
-        final statusOrders = ordersMap[status] as Map<dynamic, dynamic>? ?? {};
-        statusOrders.forEach((key, value) {
-          try {
-            final orderDateEpoch = (value['orderDate'] as num?)?.toInt();
-            if (orderDateEpoch != null) {
-              final orderDate = DateTime.fromMillisecondsSinceEpoch(orderDateEpoch);
-              if (orderDate.year == date.year && orderDate.month == date.month && orderDate.day == date.day) {
-                totalOrderCount++;
-                final items = value['items'] as List<dynamic>?;
-                double orderItemsSum = 0.0;
-                if (items != null) {
-                  for (var item in items) {
-                    final itemMap = Map<String, dynamic>.from(item);
-                    final unitPrice = (itemMap['unitPrice'] as num?)?.toDouble() ?? 0.0;
-                    final quantity = (itemMap['quantity'] as num?)?.toInt() ?? 0;
-                    orderItemsSum += unitPrice * quantity;
-                  }
-                }
-                final discount = (value['discount'] as num?)?.toDouble() ?? 0.0;
-                totalRevenue += orderItemsSum - discount;
-              }
-            }
-          } catch (e) {
-            log("Lỗi khi phân tích đơn hàng ($status): $e");
-          }
-        });
-      }
-
-      draftOrderCount = (ordersMap['draft'] as Map<dynamic, dynamic>?)?.length ?? 0;
-      savedOrderCount = (ordersMap['saved'] as Map<dynamic, dynamic>?)?.length ?? 0;
-
-      int previousOrderCount = 0;
-      double previousRevenue = 0.0;
-      for (var status in ['completed', 'saved']) {
-        final statusOrders = ordersMap[status] as Map<dynamic, dynamic>? ?? {};
-        statusOrders.forEach((key, value) {
-          try {
-            final orderDateEpoch = (value['orderDate'] as num?)?.toInt();
-            if (orderDateEpoch != null) {
-              final orderDate = DateTime.fromMillisecondsSinceEpoch(orderDateEpoch);
-              if (orderDate.year == previousDate.year &&
-                  orderDate.month == previousDate.month &&
-                  orderDate.day == previousDate.day) {
-                previousOrderCount++;
-                final items = value['items'] as List<dynamic>?;
-                double orderItemsSum = 0.0;
-                if (items != null) {
-                  for (var item in items) {
-                    final itemMap = Map<String, dynamic>.from(item);
-                    final unitPrice = (itemMap['unitPrice'] as num?)?.toDouble() ?? 0.0;
-                    final quantity = (itemMap['quantity'] as num?)?.toInt() ?? 0;
-                    orderItemsSum += unitPrice * quantity;
-                  }
-                }
-                final discount = (value['discount'] as num?)?.toDouble() ?? 0.0;
-                previousRevenue += orderItemsSum - discount;
-              }
-            }
-          } catch (e) {
-            log("Lỗi khi phân tích đơn hàng trước đó ($status): $e");
-          }
-        });
-      }
-
-      if (previousRevenue != 0) {
-        revenuePercentageChange = ((totalRevenue - previousRevenue) / previousRevenue) * 100;
-      } else if (totalRevenue != 0) {
-        revenuePercentageChange = 100.0;
-      }
-
-      if (previousOrderCount != 0) {
-        orderPercentageChange = ((totalOrderCount - previousOrderCount) / previousOrderCount) * 100;
-      } else if (totalOrderCount != 0) {
-        orderPercentageChange = 100.0;
-      }
-
-    } catch (e) {
-      log("Lỗi khi tải dữ liệu báo cáo: $e");
-    }
-
-    return {
-      'orderCount': totalOrderCount,
-      'totalRevenue': totalRevenue,
-      'draftOrderCount': draftOrderCount,
-      'savedOrderCount': savedOrderCount,
-      'revenuePercentageChange': revenuePercentageChange,
-      'orderPercentageChange': orderPercentageChange,
-    };
-  }
-
-  Future<void> _preWarmFirebaseConnections(String? userId) async {
-    if (userId == null) return;
-    try {
-      final dbRef = FirebaseDatabase.instance.ref();
-      await Future.wait([
-        dbRef.child('nguoidung/$userId').get(),
-        dbRef.child('nguoidung/$userId/sanpham').get(),
-        dbRef.child('nguoidung/$userId/thongtincuahang').get(),
-      ]);
-    } catch (e) {
-      log('Splash: Lỗi pre-warm Firebase: $e');
-    }
-  }
 
   @override
   void dispose() {
@@ -486,12 +432,12 @@ if (!hasInterface || !hasInternet) {
                     const SizedBox(height: 40),
                     FadeTransition(
                       opacity: _fadeAnimation,
-                      child: const Text(
+                      child: Text(
                         'TeckSale',
-                        style: TextStyle(
+                        style: GoogleFonts.quicksand(
                           fontSize: 32,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF1976D2),
+                          fontWeight: FontWeight.w900,
+                          color: const Color(0xFF1976D2),
                           letterSpacing: 2,
                         ),
                       ),
@@ -503,7 +449,7 @@ if (!hasInterface || !hasInternet) {
                         'Quản lý bán hàng thông minh',
                         style: TextStyle(
                           fontSize: 16,
-                          color: Color(0xFF666666),
+                          color: Color.fromARGB(255, 85, 85, 85),
                           fontWeight: FontWeight.w500,
                         ),
                       ),
@@ -557,15 +503,15 @@ if (!hasInterface || !hasInternet) {
                     FadeTransition(
                       opacity: _fadeAnimation,
                       child: const Text(
-                        'Design TeckSale by Huy Lữ',
-                        style: TextStyle(fontSize: 15, color: Color(0xFF999999)),
+                        '"Design TeckSale by Huy Lữ"',
+                        style: TextStyle(fontSize: 15, color: Color.fromARGB(255, 137, 137, 137)),
                       ),
                     ),
                     const SizedBox(height: 8),
                     FadeTransition(
                       opacity: _fadeAnimation,
                       child: const Text(
-                        '"Version 1.1.1"',
+                        ' ',
                         style: TextStyle(fontSize: 10, color: Color(0xFF999999)),
                         textAlign: TextAlign.center,
                       ),

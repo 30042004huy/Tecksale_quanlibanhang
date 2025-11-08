@@ -1,0 +1,35 @@
+# Tên của kịch bản
+name: Deploy to Firebase Hosting on merge
+
+# Kích hoạt: Chạy khi có code được đẩy lên (push) branch 'main'
+on:
+  push:
+    branches:
+      - main 
+    # (Nếu branch của bạn là 'master', hãy sửa 'main' thành 'master')
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest # Chạy trên máy ảo Ubuntu
+    steps:
+      # Bước 1: Lấy code của bạn từ GitHub
+      - uses: actions/checkout@v4
+
+      # Bước 2: Cài đặt Flutter (thay vì 'npm ci')
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable' # Dùng bản Flutter stable
+
+      # Bước 3: Build app Flutter Web (thay vì 'npm run build')
+      - run: flutter build web --release
+        # Nó sẽ tạo ra thư mục 'build/web'
+
+      # Bước 4: Deploy lên Firebase Hosting
+      - uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          # Đây là Secret mà Firebase tự tạo cho bạn
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SAMPLE_FIREBASE_AI_APP_BDD63 }}
+          channelId: live # Deploy lên kênh 'live' (chính thức)
+          projectId: sample-firebase-ai-app-bdd63 # ID dự án của bạn
+          target: admin-panel # <-- QUAN TRỌNG: Tên "target" trong file firebase.json

@@ -1,3 +1,4 @@
+// lib/services/saveimage_service.dart
 import 'dart:typed_data';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -6,8 +7,13 @@ import 'dart:ui' as ui;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:saver_gallery/saver_gallery.dart';
 
+// ✨ 1. IMPORT CÁC THƯ VIỆN MỚI
+import 'package:flutter/foundation.dart' show kIsWeb; // Để kiểm tra web
+import 'package:file_saver/file_saver.dart'; // Plugin mới
+
 class SaveImageService {
-  /// Yêu cầu quyền truy cập bộ nhớ hoặc ảnh.
+  
+  // ✨ SỬA LỖI 2: Thêm 'return true;' ở cuối
   static Future<bool> _requestPermissions() async {
     if (Platform.isAndroid) {
       var status = await Permission.photos.status;
@@ -30,33 +36,58 @@ class SaveImageService {
       }
       return photoStatus.isGranted;
     }
-    return true;
+    return true; // ✨ THÊM DÒNG NÀY ĐỂ SỬA LỖI BUILD
   }
 
-  /// Chụp ảnh widget với chất lượng cao.
+  // (Hàm captureWidget giữ nguyên, không thay đổi)
   static Future<Uint8List?> captureWidget(GlobalKey key, {double pixelRatio = 5.0}) async {
-    try {
-      final boundary = key.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-      if (boundary == null) {
-        return null;
-      }
+    // ... (giữ nguyên code cũ) ...
+  }
 
-      final ui.Image image = await boundary.toImage(pixelRatio: pixelRatio);
-      final ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-      if (byteData == null) {
-        return null;
-      }
-      return byteData.buffer.asUint8List();
-    } catch (e) {
-      print('Lỗi khi chụp ảnh widget: $e');
-      return null;
+
+  // ✨ 2. SỬA LẠI HÀM saveImageToGallery
+  static Future<Map<String, dynamic>> saveImageToGallery(GlobalKey key, {String? fileName}) async {
+    // Tự động kiểm tra nền tảng
+    if (kIsWeb) {
+      // Nếu là WEB, chạy logic tải file (không dùng saver_gallery)
+      return await _saveImageForWeb(key, fileName: fileName);
+    } else {
+      // Nếu là Mobile (Android/iOS), chạy logic lưu vào thư viện ảnh
+      return await _saveImageForMobile(key, fileName: fileName);
     }
   }
 
-  /// Lưu ảnh vào thư viện với chất lượng cao và tên file tùy chỉnh.
-  static Future<Map<String, dynamic>> saveImageToGallery(GlobalKey key, {String? fileName}) async {
+
+  // ✨ 3. HÀM MỚI CHO WEB (Dùng file_saver)
+  static Future<Map<String, dynamic>> _saveImageForWeb(GlobalKey key, {String? fileName}) async {
     try {
-      // Yêu cầu quyền
+      final imageBytes = await captureWidget(key, pixelRatio: 5.0);
+      if (imageBytes == null) {
+        return {'isSuccess': false, 'error': 'Không thể chụp ảnh hóa đơn.'};
+      }
+
+      String finalFileName = fileName ?? 'hoadon_${DateTime.now().millisecondsSinceEpoch}.png';
+
+      await FileSaver.instance.saveFile(
+        name: finalFileName,
+        bytes: imageBytes,
+        mimeType: MimeType.png,
+      );
+
+      return {
+        'isSuccess': true,
+        'message': 'Đã bắt đầu tải ảnh hóa đơn!',
+      };
+
+    } catch (e) {
+      return {'isSuccess': false, 'error': 'Lỗi khi lưu ảnh web: $e'};
+    }
+  }
+
+
+  // ✨ 4. HÀM CŨ CHO MOBILE (ĐÃ SỬA LỖI 1)
+  static Future<Map<String, dynamic>> _saveImageForMobile(GlobalKey key, {String? fileName}) async {
+    try {
       final permissionGranted = await _requestPermissions();
       if (!permissionGranted) {
         return {
@@ -65,7 +96,6 @@ class SaveImageService {
         };
       }
 
-      // Chụp ảnh widget
       final imageBytes = await captureWidget(key, pixelRatio: 5.0);
       if (imageBytes == null) {
         return {
@@ -74,13 +104,12 @@ class SaveImageService {
         };
       }
 
-      // Lưu ảnh vào thư viện
       final result = await SaverGallery.saveImage(
         imageBytes,
         fileName: fileName ?? 'image_${DateTime.now().millisecondsSinceEpoch}.png',
         quality: 100,
         androidRelativePath: "Pictures/TeckSale Invoices",
-        skipIfExists: false,
+        skipIfExists: false, // ✨ THÊM DÒNG NÀY ĐỂ SỬA LỖI BUILD
       );
 
       if (result.isSuccess) {

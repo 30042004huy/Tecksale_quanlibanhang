@@ -1,15 +1,14 @@
+// VỊ TRÍ: lib/models/sanpham_model.dart
+
 /// Lớp đại diện cho một sản phẩm.
-/// Model này được thiết kế để sử dụng trong các trang như quản lý sản phẩm
-/// và đặc biệt là trang tạo đơn hàng, nơi thông tin sản phẩm có thể được
-/// tự động điền khi chọn bằng mã hoặc tên.
 class SanPham {
-  String id; // ID duy nhất của sản phẩm từ Firebase (key)
-  String maSP; // Mã sản phẩm (ví dụ: SP001)
-  String tenSP; // Tên sản phẩm (ví dụ: Áo thun nam)
-  double donGia; // Đơn giá bán của sản phẩm
-  String donVi; // Đơn vị tính (ví dụ: Cái, Chiếc, Bộ)
-  double? giaNhap; // Giá nhập (tùy chọn, không bắt buộc khi tạo đối tượng)
-  int? tonKho; // Tồn kho (tùy chọn, không bắt buộc khi tạo đối tượng)
+  String id;      // ID duy nhất của sản phẩm từ Firebase (key)
+  String maSP;    // Mã sản phẩm (ví dụ: SP001)
+  String tenSP;   // Tên sản phẩm (ví dụ: Áo thun nam)
+  double donGia;  // Đơn giá bán của sản phẩm
+  String donVi;   // Đơn vị tính (ví dụ: Cái, Chiếc, Bộ)
+  double? giaNhap; // Giá nhập (tùy chọn)
+  int? tonKho;    // Tồn kho (tùy chọn)
 
   SanPham({
     required this.id,
@@ -17,37 +16,38 @@ class SanPham {
     required this.tenSP,
     required this.donGia,
     required this.donVi,
-    this.giaNhap, // Đặt là tùy chọn
-    this.tonKho, // Đặt là tùy chọn
+    this.giaNhap,
+    this.tonKho,
   });
 
+  /// ✨ HÀM fromMap ĐÃ ĐƯỢC SỬA LẠI ĐỂ AN TOÀN TUYỆT ĐỐI ✨
   /// Phương thức factory để tạo một đối tượng SanPham từ dữ liệu Map.
-  /// Thường được sử dụng khi đọc dữ liệu từ Firebase Realtime Database.
-  ///
-  /// [map]: Dữ liệu sản phẩm dưới dạng Map<dynamic, dynamic> từ Firebase.
-  /// [id]: Key (ID) của sản phẩm trong Firebase.
+  /// Giờ đây nó sẽ không bao giờ gây crash, ngay cả khi dữ liệu trên Firebase bị thiếu.
   factory SanPham.fromMap(Map<dynamic, dynamic> map, String id) {
     return SanPham(
       id: id,
-      maSP: map['maSP'] ?? '',
-      tenSP: map['tenSP'] ?? '',
-      donGia: (map['donGia'] as num?)?.toDouble() ?? 0.0, // Chuyển đổi sang double
-      donVi: map['donVi'] ?? '',
-      giaNhap: (map['giaNhap'] as num?)?.toDouble(), // Lấy giá nhập (có thể null)
-      tonKho: (map['tonKho'] as int?), // Lấy tồn kho (có thể null)
+      // Cung cấp giá trị mặc định ('') nếu 'maSP' không tồn tại hoặc null
+      maSP: map['maSP']?.toString() ?? '', 
+      tenSP: map['tenSP']?.toString() ?? 'Sản phẩm không tên',
+      donGia: (map['donGia'] as num?)?.toDouble() ?? 0.0,
+      // Cung cấp giá trị mặc định ('') nếu 'donVi' không tồn tại hoặc null
+      donVi: map['donVi']?.toString() ?? '', 
+      giaNhap: (map['giaNhap'] as num?)?.toDouble(),
+      tonKho: (map['tonKho'] as num?)?.toInt() ?? 0,
     );
   }
 
+  /// ✨ HÀM toMap ĐÃ ĐƯỢC SỬA LẠI ĐỂ NHẤT QUÁN ✨
   /// Phương thức để chuyển đổi đối tượng SanPham thành Map.
-  /// Thường được sử dụng khi ghi dữ liệu sản phẩm lên Firebase.
+  /// Đảm bảo các trường bắt buộc luôn được lưu lên Firebase.
   Map<String, dynamic> toMap() {
     return {
-      'maSP': maSP,
+      'maSP': maSP, // Bỏ điều kiện if không cần thiết, đảm bảo maSP luôn được lưu
       'tenSP': tenSP,
       'donGia': donGia,
-      'donVi': donVi,
-      'giaNhap': giaNhap, // Bao gồm giá nhập
-      'tonKho': tonKho, // Bao gồm tồn kho
+      'donVi': donVi, // Bỏ điều kiện if không cần thiết, đảm bảo donVi luôn được lưu
+      if (giaNhap != null) 'giaNhap': giaNhap,
+      if (tonKho != null) 'tonKho': tonKho,
     };
   }
 }

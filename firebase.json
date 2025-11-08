@@ -1,5 +1,9 @@
 {
+  "functions": {
+    "source": "functions"
+  },
   "hosting": {
+    "target": "admin-panel",
     "public": "build/web",
     "ignore": [
       "firebase.json",

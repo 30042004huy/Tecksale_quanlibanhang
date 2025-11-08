@@ -1,5 +1,15 @@
 {
   "projects": {
     "default": "sample-firebase-ai-app-bdd63"
-  }
+  },
+  "targets": {
+    "sample-firebase-ai-app-bdd63": {
+      "hosting": {
+        "admin-panel": [
+          "tecksale"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }

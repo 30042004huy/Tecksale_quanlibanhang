@@ -5,6 +5,7 @@ import 'package:tecksale_quanlybanhang/services/auth_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'trangchu.dart';
 import 'hotro.dart';
+import '../services/login_history_service.dart'; // ✨ THÊM DÒNG NÀY
 
 class DangNhapScreen extends StatefulWidget {
   @override
@@ -89,6 +90,7 @@ class _DangNhapScreenState extends State<DangNhapScreen> {
         }
 
         await _saveCredentials();
+        await LoginHistoryService().recordLogin();
 
         if (!mounted) return;
 

@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tecksale_quanlybanhang/services/printer_service.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'dart:convert';
+import 'dart:developer';
 
 class CaiDatMayInScreen extends StatefulWidget {
   const CaiDatMayInScreen({super.key});
@@ -14,374 +16,348 @@ class CaiDatMayInScreen extends StatefulWidget {
 
 class _CaiDatMayInScreenState extends State<CaiDatMayInScreen> {
   final PrinterService _printerService = PrinterService();
-  List<BluetoothDevice> _connectedDevices = [];
+  final TextEditingController _printerNameController = TextEditingController();
+  final TextEditingController _ipController = TextEditingController(text: '192.168.1.100'); // IP mặc định
+  String _connectionType = 'TCP/IP';
+  List<Map<String, dynamic>> _savedPrinters = [];
+  bool _isScanning = false;
   bool _isLoading = false;
-  String? _connectedPrinter;
+  List<BluetoothDevice> _bluetoothDevices = [];
 
   @override
   void initState() {
     super.initState();
-    _checkPermissions();
-    _loadLastPrinter();
-    _printerService.onPrinterConnected = (printerName) {
+    _loadSavedPrinters();
+    // Bắt sự kiện tìm thấy thiết bị Bluetooth
+    _printerService.onDevicesFound = (devices) {
       if (mounted) {
         setState(() {
-          _connectedPrinter = printerName;
-          _connectedDevices = []; // Hide other devices after connection
+          _bluetoothDevices = devices;
+          _isScanning = false;
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Kết nối thiết bị $printerName thành công')),
-        );
+        _showSnackBar('Đã tìm thấy ${devices.length} thiết bị Bluetooth.', Colors.green);
+      }
+    };
+    // Bắt sự kiện kết nối thành công
+    _printerService.onPrinterConnected = (name) {
+      if (mounted) {
+        _showSnackBar('Kết nối máy in thành công: $name', Colors.green);
       }
     };
   }
 
-  Future<void> _checkPermissions() async {
-    final permissions = [
-      Permission.bluetooth,
-      Permission.bluetoothScan,
-      Permission.bluetoothConnect,
-      Permission.locationWhenInUse,
-    ];
-    final statuses = await permissions.request();
-    List<String> missingPermissions = [];
-    if (statuses[Permission.bluetooth] != PermissionStatus.granted) {
-      missingPermissions.add('Bluetooth');
-    }
-    if (statuses[Permission.bluetoothScan] != PermissionStatus.granted) {
-      missingPermissions.add('Quét Bluetooth');
-    }
-    if (statuses[Permission.bluetoothConnect] != PermissionStatus.granted) {
-      missingPermissions.add('Kết nối Bluetooth');
-    }
-    if (statuses[Permission.locationWhenInUse] != PermissionStatus.granted) {
-      missingPermissions.add('Vị trí');
-    }
-
-    if (missingPermissions.isNotEmpty && mounted) {
+  // HÀM HIỂN THỊ CẢNH BÁO DƯỚI DẠNG POPUP (SnackBar)
+  void _showSnackBar(String message, Color color) {
+    if (mounted) {
+      // Loại bỏ tiền tố 'Exception: ' cho tin nhắn lỗi
+      final cleanMessage = message.replaceAll('Exception: ', '');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Vui lòng cấp quyền: ${missingPermissions.join(', ')}'),
-          action: SnackBarAction(
-            label: 'Mở cài đặt',
-            onPressed: () => openAppSettings(),
-          ),
+          content: Text(cleanMessage),
+          backgroundColor: color,
         ),
       );
-    } else {
-      _loadConnectedDevices();
     }
   }
 
-  Future<void> _loadLastPrinter() async {
+  Future<void> _loadSavedPrinters() async {
+    final prefs = await SharedPreferences.getInstance();
     final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      final ref = FirebaseDatabase.instance.ref('nguoidung/${user.uid}/mayin');
-      final snapshot = await ref.get();
-      if (snapshot.exists) {
-        final data = snapshot.value as Map<dynamic, dynamic>;
-        if (mounted) {
-          setState(() {
-            _connectedPrinter = data['name'];
-          });
-        }
-        if (_connectedPrinter != null) {
-          try {
-            await _printerService.reconnectBluetoothPrinter(_connectedPrinter!);
-          } catch (e) {
-            // Silent error to avoid disrupting UI
-          }
-        }
-      }
-    }
-  }
-
-  Future<void> _savePrinterToFirebase(String? name) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      final ref = FirebaseDatabase.instance.ref('nguoidung/${user.uid}/mayin');
-      await ref.set({
-        'name': name,
-      });
-    }
-  }
-
-  Future<void> _loadConnectedDevices() async {
-    setState(() {
-      _isLoading = true;
-      _connectedDevices = [];
-    });
+    setState(() => _isLoading = true);
+    
     try {
-      // Ensure Bluetooth is enabled
-      if (!(await FlutterBluePlus.isAvailable)) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text('Bluetooth chưa được bật'),
-              action: SnackBarAction(
-                label: 'Bật Bluetooth',
-                onPressed: () => FlutterBluePlus.turnOn(),
-              ),
-            ),
-          );
+      // Tải từ Firebase (nếu có)
+      if (user != null) {
+        final ref = FirebaseDatabase.instance.ref('nguoidung/${user.uid}/printers');
+        final snapshot = await ref.get();
+        if (snapshot.exists) {
+          final data = snapshot.value as Map<dynamic, dynamic>;
+          _savedPrinters = data.values.map((e) => Map<String, dynamic>.from(e)).toList();
         }
-        return;
       }
-
-      final devices = await FlutterBluePlus.connectedDevices;
-      if (mounted) {
-        setState(() {
-          _connectedDevices = devices;
-        });
+      // Tải từ Local (nếu có)
+      final savedPrintersJson = prefs.getString('saved_printers');
+      if (savedPrintersJson != null) {
+        _savedPrinters = (jsonDecode(savedPrintersJson) as List<dynamic>).map((e) => Map<String, dynamic>.from(e)).toList();
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Lỗi lấy danh sách thiết bị: $e')),
-        );
-      }
+      _showSnackBar('Lỗi tải máy in: $e', Colors.red);
     } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
+      setState(() => _isLoading = false);
     }
   }
 
-  void _connectBluetoothPrinter(BluetoothDevice device) async {
-    try {
-      await _printerService.connectBluetoothPrinter(device);
-      if (mounted) {
-        setState(() {
-          _connectedPrinter = device.name.isNotEmpty ? device.name : device.id.toString();
-          _connectedDevices = []; // Hide other devices
-        });
-        _savePrinterToFirebase(_connectedPrinter);
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Lỗi kết nối thiết bị: $e')),
-        );
-      }
-    }
-  }
-
-  void _testPrint() async {
-    if (_connectedPrinter == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Vui lòng chọn thiết bị trước')),
-      );
+  Future<void> _savePrinter() async {
+    if (_printerNameController.text.isEmpty || (_connectionType == 'TCP/IP' && _ipController.text.isEmpty)) {
+      _showSnackBar('Vui lòng nhập tên và thông tin máy in', Colors.orange);
       return;
     }
+    
+    // Kiểm tra xem đã kết nối Bluetooth chưa nếu chọn loại Bluetooth
+    if (_connectionType == 'Bluetooth' && _printerService.getConnectedBluetoothId() == null) {
+       _showSnackBar('Vui lòng kết nối với thiết bị Bluetooth trước khi lưu.', Colors.orange);
+       return;
+    }
+
+    setState(() => _isLoading = true);
     try {
-      await _printerService.testPrintLogo();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Gửi dữ liệu ảnh thành công')),
-        );
+      final printer = {
+        'printerName': _printerNameController.text,
+        'connectionType': _connectionType,
+        'ip': _connectionType == 'TCP/IP' ? _ipController.text : null,
+        'bluetoothId': _connectionType == 'Bluetooth' ? await _printerService.getConnectedBluetoothId() : null,
+        'isDefault': _savedPrinters.isEmpty,
+      };
+      _savedPrinters.add(printer);
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('saved_printers', jsonEncode(_savedPrinters));
+
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        final ref = FirebaseDatabase.instance.ref('nguoidung/${user.uid}/printers/${printer['printerName']}');
+        await ref.set(printer);
       }
+
+      _showSnackBar('Lưu máy in thành công', Colors.green);
+      _printerNameController.clear();
+      _ipController.clear();
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Lỗi gửi dữ liệu ảnh: $e')),
-        );
-      }
+      _showSnackBar('Lỗi lưu máy in: $e', Colors.red);
+    } finally {
+      setState(() => _isLoading = false);
     }
   }
 
-  void _refreshDevices() async {
-    await _loadConnectedDevices();
-    if (mounted) {
-      setState(() {
-        _connectedPrinter = null; // Reset selected device to show list
-      });
+Future<void> _testPrint(String printerName, String connectionType, {String? ip, String? bluetoothId}) async {
+  setState(() => _isLoading = true);
+  try {
+    // 1. Thực hiện kết nối lại/kết nối nếu chưa kết nối
+    if (connectionType == 'TCP/IP') {
+      if (ip == null || ip.isEmpty) {
+        throw Exception('Địa chỉ IP không hợp lệ');
+      }
+      await _printerService.connectTcpIpPrinter(ip);
+    } else if (connectionType == 'Bluetooth' && bluetoothId != null) {
+      final device = await _printerService.reconnectBluetoothPrinter(bluetoothId);
+      await _printerService.connectBluetoothPrinter(device);
+    } else {
+      throw Exception('Không có thông tin kết nối máy in.');
+    }
+    
+    // 2. In thử
+    await _printerService.testPrint();
+    _showSnackBar('In thử ảnh logo thành công!', Colors.green);
+  } catch (e) {
+    _showSnackBar('Thất bại: $e', Colors.red);
+  } finally {
+    setState(() => _isLoading = false);
+  }
+}
+  Future<void> _startBluetoothScan() async {
+    setState(() {
+      _isScanning = true;
+      _bluetoothDevices = [];
+    });
+    try {
+      await _printerService.startBluetoothScan();
+    } catch (e) {
+      _showSnackBar('Lỗi quét Bluetooth: $e', Colors.red);
+      setState(() => _isScanning = false);
+    }
+  }
+
+  Future<void> _setDefaultPrinter(int index) async {
+    setState(() {
+      for (var i = 0; i < _savedPrinters.length; i++) {
+        _savedPrinters[i]['isDefault'] = i == index;
+      }
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('saved_printers', jsonEncode(_savedPrinters));
+    _showSnackBar('Đã đặt ${_savedPrinters[index]['printerName']} làm máy in mặc định.', Colors.blue);
+    
+    // Đồng bộ lên Firebase (giống _savePrinter)
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      final ref = FirebaseDatabase.instance.ref('nguoidung/${user.uid}/printers');
+      await ref.set({for (var p in _savedPrinters) p['printerName']: p});
+    }
+  }
+
+  Future<void> _deletePrinter(int index) async {
+    setState(() => _isLoading = true);
+    try {
+      final printer = _savedPrinters[index];
+      _savedPrinters.removeAt(index);
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('saved_printers', jsonEncode(_savedPrinters));
+
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        final ref = FirebaseDatabase.instance.ref('nguoidung/${user.uid}/printers/${printer['printerName']}');
+        await ref.remove();
+      }
+
+      _showSnackBar('Đã xóa máy in', Colors.blueGrey);
+    } catch (e) {
+      _showSnackBar('Lỗi xóa máy in: $e', Colors.red);
+    } finally {
+      setState(() => _isLoading = false);
     }
   }
 
   @override
   void dispose() {
     _printerService.dispose();
+    _printerNameController.dispose();
+    _ipController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA),
       appBar: AppBar(
-        title: const Text(
-          'Cài đặt máy in',
-          style: TextStyle(
-            fontWeight: FontWeight.w700,
-            fontSize: 20,
-            letterSpacing: 0.5,
-          ),
-        ),
+        title: const Text('Cài đặt máy in', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 20)),
         backgroundColor: Colors.white,
         foregroundColor: Colors.black87,
         elevation: 2,
-        shadowColor: Colors.black26,
         centerTitle: true,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, size: 24),
-          onPressed: () => Navigator.pop(context),
-        ),
+        leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.pop(context)),
       ),
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Color(0xFFE8F0FE), Color(0xFFF5F7FA)],
-          ),
-        ),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (_connectedPrinter != null) ...[
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.grey[200]!, width: 1),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.08),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Thêm máy in mới', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 12),
+            Container(
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 8)]),
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  DropdownButton<String>(
+                    value: _connectionType,
+                    isExpanded: true,
+                    items: ['Bluetooth', 'TCP/IP'].map((String value) {
+                      return DropdownMenuItem<String>(
+                        value: value,
+                        child: Text(value),
+                      );
+                    }).toList(),
+                    onChanged: (value) {
+                      setState(() {
+                        _connectionType = value!;
+                        if (value == 'Bluetooth') {
+                          _startBluetoothScan();
+                        }
+                      });
+                    },
                   ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).primaryColor.withOpacity(0.1),
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(Icons.bluetooth, color: Theme.of(context).primaryColor, size: 24),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          'Thiết bị hiện tại: $_connectedPrinter',
-                          style: const TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.black87,
-                          ),
-                        ),
-                      ),
-                      Row(
-                        children: [
-                          ElevatedButton(
-                            onPressed: _testPrint,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Theme.of(context).primaryColor,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                            child: const Text(
-                              'In thử',
-                              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          IconButton(
-                            icon: Icon(Icons.refresh, color: Theme.of(context).primaryColor),
-                            onPressed: _refreshDevices,
-                          ),
-                        ],
-                      ),
-                    ],
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _printerNameController,
+                    decoration: const InputDecoration(labelText: 'Tên máy in', border: OutlineInputBorder()),
                   ),
-                ),
-                const SizedBox(height: 20),
-              ],
-              if (_connectedPrinter == null) ...[
-                const Text(
-                  'Thiết bị Bluetooth đang kết nối',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.black87,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.grey[200]!, width: 1),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.08),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    children: [
-                      ListTile(
-                        title: const Text(
-                          'Danh sách thiết bị',
-                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-                        ),
-                        trailing: _isLoading
-                            ? const SizedBox(
-                                width: 24,
-                                height: 24,
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : IconButton(
-                                icon: Icon(Icons.refresh, color: Theme.of(context).primaryColor),
-                                onPressed: _loadConnectedDevices,
-                              ),
-                      ),
-                      if (_isLoading)
-                        const Padding(
-                          padding: EdgeInsets.all(16),
-                          child: Center(
-                            child: CircularProgressIndicator(),
-                          ),
-                        ),
-                      if (!_isLoading && _connectedDevices.isEmpty)
-                        const ListTile(
-                          title: Text(
-                            'Không có thiết bị Bluetooth nào đang kết nối',
-                            style: TextStyle(fontSize: 14, color: Colors.grey),
-                          ),
-                        ),
-                      if (!_isLoading && _connectedDevices.isNotEmpty) ...[
-                        const Divider(height: 1),
-                        ..._connectedDevices.map((device) => ListTile(
-                              title: Text(
+                  if (_connectionType == 'TCP/IP') ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _ipController,
+                      decoration: const InputDecoration(labelText: 'Địa chỉ IP (Ví dụ: 192.168.1.100)', border: OutlineInputBorder()),
+                      keyboardType: TextInputType.numberWithOptions(decimal: true),
+                    ),
+                  ],
+                  if (_connectionType == 'Bluetooth') ...[
+                    const SizedBox(height: 12),
+                    ElevatedButton(
+                      onPressed: _isScanning ? null : _startBluetoothScan,
+                      child: Text(_isScanning ? 'Đang quét...' : 'Quét Bluetooth (${_bluetoothDevices.length} thiết bị)'),
+                    ),
+                    if (_bluetoothDevices.isNotEmpty)
+                      ListView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: _bluetoothDevices.length,
+                        itemBuilder: (context, index) {
+                          final device = _bluetoothDevices[index];
+                          return ListTile(
+                            dense: true,
+                            title: Text(device.name.isNotEmpty ? device.name : 'Thiết bị ẩn danh'),
+                            subtitle: Text(device.id.toString()),
+                            trailing: ElevatedButton(
+                              onPressed: () => _testPrint(
                                 device.name.isNotEmpty ? device.name : device.id.toString(),
-                                style: const TextStyle(fontSize: 14),
+                                'Bluetooth',
+                                bluetoothId: device.id.toString(),
                               ),
-                              subtitle: Text(
-                                device.id.toString(),
-                                style: const TextStyle(fontSize: 12, color: Colors.grey),
-                              ),
-                              onTap: () => _connectBluetoothPrinter(device),
-                            )),
-                      ],
-                    ],
+                              child: const Text('Kết nối & Test'),
+                            ),
+                          );
+                        },
+                      ),
+                  ],
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: _isLoading ? null : _savePrinter,
+                      child: Text(_isLoading ? 'Đang lưu...' : 'Lưu máy in'),
+                    ),
                   ),
-                ),
-              ],
-            ],
-          ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text('Danh sách máy in đã lưu', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 12),
+            _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _savedPrinters.isEmpty
+                    ? const Text('Chưa có máy in nào được lưu', style: TextStyle(color: Colors.grey))
+                    : ListView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: _savedPrinters.length,
+                        itemBuilder: (context, index) {
+                          final printer = _savedPrinters[index];
+                          return ListTile(
+                            tileColor: printer['isDefault'] ? Colors.blue.withOpacity(0.1) : null,
+                            title: Text(printer['printerName'], style: TextStyle(fontWeight: printer['isDefault'] ? FontWeight.bold : FontWeight.normal)),
+                            subtitle: Text('${printer['connectionType']} ${printer['ip'] != null ? '- IP: ${printer['ip']}' : ''}'),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.print),
+                                  onPressed: () => _testPrint(
+                                    printer['printerName'],
+                                    printer['connectionType'],
+                                    ip: printer['ip'],
+                                    bluetoothId: printer['bluetoothId'],
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.delete),
+                                  onPressed: () => _deletePrinter(index),
+                                  color: Colors.red,
+                                ),
+                                Tooltip(
+                                  message: 'Đặt làm mặc định',
+                                  child: Checkbox(
+                                    value: printer['isDefault'],
+                                    onChanged: (value) => _setDefaultPrinter(index),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+          ],
         ),
       ),
     );

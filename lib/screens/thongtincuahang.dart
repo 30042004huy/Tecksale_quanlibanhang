@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:flutter/services.dart';
 
 class ThongTinCuaHangScreen extends StatefulWidget {
   const ThongTinCuaHangScreen({super.key});
@@ -12,6 +15,8 @@ class ThongTinCuaHangScreen extends StatefulWidget {
 class _ThongTinCuaHangScreenState extends State<ThongTinCuaHangScreen> {
   final uid = FirebaseAuth.instance.currentUser?.uid;
   final db = FirebaseDatabase.instance;
+  Timer? _debounce;
+  final Map<String, String?> _fieldErrors = {}; // ✨ Biến để lưu trạng thái lỗi
 
   final _controllers = {
     'tenCuaHang': TextEditingController(),
@@ -28,254 +33,223 @@ class _ThongTinCuaHangScreenState extends State<ThongTinCuaHangScreen> {
   @override
   void initState() {
     super.initState();
-
-    // 🔒 Luôn đồng bộ dữ liệu nhánh thông tin cửa hàng
-    if (uid != null) {
-      db.ref("nguoidung/$uid/thongtincuahang").keepSynced(true);
-    }
-
     _loadData();
+    _controllers.forEach((key, controller) {
+      controller.addListener(_onFieldChanged);
+    });
+  }
+  
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _controllers.forEach((key, controller) {
+      controller.removeListener(_onFieldChanged);
+      controller.dispose();
+    });
+    super.dispose();
   }
 
   void _loadData() async {
     if (uid == null) return;
     final snapshot = await db.ref('nguoidung/$uid/thongtincuahang').get();
-    if (snapshot.exists) {
+    if (snapshot.exists && mounted) {
       final data = Map<String, dynamic>.from(snapshot.value as Map);
       _controllers.forEach((key, controller) {
         controller.text = data[key] ?? '';
       });
+      _validatePaymentFields(); // Kiểm tra lỗi ngay khi tải dữ liệu
     }
   }
 
-  void _saveAll() {
-    if (uid == null) return;
-
-    final dataToSave = {
-      for (final entry in _controllers.entries) entry.key: entry.value.text,
-    };
-
-    db
-        .ref('nguoidung/$uid/thongtincuahang')
-        .update(dataToSave); // ✅ dùng update thay vì set
+  void _onFieldChanged() {
+    _validatePaymentFields(); // Kiểm tra lỗi mỗi khi có thay đổi
+    if (_debounce?.isActive ?? false) _debounce!.cancel();
+    _debounce = Timer(const Duration(milliseconds: 800), () {
+      _saveAll();
+    });
   }
 
+  // ✨ HÀM LƯU ĐÃ ĐƯỢC BỎ THÔNG BÁO SNACKBAR
+  void _saveAll() {
+    if (uid == null || !mounted) return;
+
+    final dataToSave = {
+      for (final entry in _controllers.entries) entry.key: entry.value.text.trim(),
+    };
+
+    db.ref('nguoidung/$uid/thongtincuahang').update(dataToSave);
+  }
+  
+  // ✨ HÀM MỚI: Kiểm tra các trường thông tin thanh toán
+  void _validatePaymentFields() {
+    final bankName = _controllers['tenNganHang']!.text.trim();
+    final accountNumber = _controllers['soTaiKhoan']!.text.trim();
+    final accountHolder = _controllers['chuTaiKhoan']!.text.trim();
+
+    // Kiểm tra xem có bất kỳ trường thanh toán nào đã được điền chưa
+    final isAnyPaymentFieldFilled = bankName.isNotEmpty || accountNumber.isNotEmpty || accountHolder.isNotEmpty;
+    
+    setState(() {
+      if (isAnyPaymentFieldFilled) {
+        // Nếu có 1 trường được điền, tất cả các trường còn lại là bắt buộc
+        _fieldErrors['tenNganHang'] = bankName.isEmpty ? 'Vui lòng không để trống' : null;
+        _fieldErrors['soTaiKhoan'] = accountNumber.isEmpty ? 'Vui lòng không để trống' : null;
+        _fieldErrors['chuTaiKhoan'] = accountHolder.isEmpty ? 'Vui lòng không để trống' : null;
+      } else {
+        // Nếu tất cả đều trống, xóa mọi lỗi
+        _fieldErrors['tenNganHang'] = null;
+        _fieldErrors['soTaiKhoan'] = null;
+        _fieldErrors['chuTaiKhoan'] = null;
+      }
+    });
+  }
+
+  // ✨ WIDGET ĐÃ ĐƯỢC CẬP NHẬT ĐỂ HIỂN THỊ LỖI
   Widget _buildInputField({
     required String label,
     required String key,
+    required IconData icon,
     String? hint,
-    TextCapitalization capitalization = TextCapitalization.none,
+    TextCapitalization capitalization = TextCapitalization.words,
     TextInputType? keyboardType,
   }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label,
-            style: const TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 15,
-                color: Colors.black87)),
-        const SizedBox(height: 6),
-        Container(
-          decoration: BoxDecoration(
-            border: Border.all(color: const Color.fromARGB(255, 212, 222, 229)),
+    final errorText = _fieldErrors[key];
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      child: TextField(
+        controller: _controllers[key],
+        textCapitalization: capitalization,
+        keyboardType: keyboardType,
+        style: GoogleFonts.roboto(fontSize: 16, color: Colors.black87),
+        decoration: InputDecoration(
+          labelText: label,
+          labelStyle: GoogleFonts.roboto(color: errorText != null ? Colors.red : Colors.grey.shade700),
+          hintText: hint,
+          hintStyle: GoogleFonts.roboto(color: Colors.grey.shade400),
+          prefixIcon: Icon(icon, color: Colors.blue.shade700),
+          filled: true,
+          fillColor: Colors.grey.shade50,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          errorText: errorText, // Hiển thị lỗi
+          border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
-            color: Colors.white,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.blue.shade100.withOpacity(0.3),
-                blurRadius: 5,
-                offset: const Offset(2, 3),
-              ),
-            ],
+            borderSide: BorderSide(color: Colors.grey.shade300),
           ),
-          child: TextField(
-            controller: _controllers[key],
-            textCapitalization: capitalization,
-            keyboardType: keyboardType,
-            onChanged: (_) => _saveAll(),
-            decoration: InputDecoration(
-              hintText: hint,
-              hintStyle: TextStyle(
-                  color: Colors.grey.shade400, fontStyle: FontStyle.italic),
-              border: InputBorder.none,
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: errorText != null ? Colors.red.shade400 : Colors.grey.shade300),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: errorText != null ? Colors.red : Colors.blue.shade700, width: 2),
           ),
         ),
-        const SizedBox(height: 20),
-      ],
+      ),
     );
   }
 
   final List<String> nganHangPhoBien = [
-    'MB Bank',
-    'VietinBank',
-    'Vietcombank',
-    'PVcomBank',
-    'Techcombank',
-    'Agribank',
-    'Sacombank',
+    'MB Bank', 'VietinBank', 'Vietcombank', 'Techcombank', 'Agribank', 'BIDV', 'Sacombank'
   ];
-
+  
   Widget _buildPopularBankChip(String name) {
     final isSelected = _controllers['tenNganHang']?.text == name;
     return GestureDetector(
       onTap: () {
-        _controllers['tenNganHang']?.text = name;
-        _saveAll();
-        setState(() {});
+        setState(() {
+          _controllers['tenNganHang']?.text = name;
+        });
+        // Listener trên controller sẽ tự động gọi _onFieldChanged
       },
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        duration: const Duration(milliseconds: 250),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
-          color: isSelected
-              ? const Color.fromARGB(255, 30, 154, 255)
-              : Colors.white,
+          color: isSelected ? Colors.blue.shade700 : Colors.grey.shade100,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: const Color.fromARGB(255, 30, 154, 255)),
-          boxShadow: isSelected
-              ? [
-                  BoxShadow(
-                    color: Colors.blue.shade300.withOpacity(0.6),
-                    blurRadius: 8,
-                    offset: const Offset(2, 3),
-                  ),
-                ]
-              : [
-                  BoxShadow(
-                    color: Colors.blue.shade100.withOpacity(0.3),
-                    blurRadius: 5,
-                    offset: const Offset(1, 2),
-                  ),
-                ],
+          border: Border.all(
+            color: isSelected ? Colors.blue.shade700 : Colors.grey.shade300
+          ),
         ),
         child: Text(
           name,
-          style: TextStyle(
-            color: isSelected ? Colors.white : Colors.blue.shade700,
-            fontWeight: FontWeight.bold,
+          style: GoogleFonts.roboto(
+            color: isSelected ? Colors.white : Colors.black87,
+            fontWeight: FontWeight.w600,
           ),
         ),
       ),
     );
   }
 
-  Widget _buildSectionCard({required Widget child}) {
-    return Card(
-      elevation: 5,
-      shadowColor: Colors.blue.shade200,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      margin: const EdgeInsets.only(bottom: 24),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: child,
+  Widget _buildSectionTitle(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8.0, bottom: 16.0),
+      child: Text(
+        title,
+        style: GoogleFonts.quicksand(
+          fontSize: 20,
+          fontWeight: FontWeight.bold,
+          color: Colors.blue.shade900
+        ),
       ),
-    );
-  }
-
-  Widget _buildSectionTitleWithIcon(IconData icon, String title) {
-    return Row(
-      children: [
-        Icon(icon, color: const Color.fromARGB(255, 30, 154, 255), size: 28),
-        const SizedBox(width: 8),
-        Text(title,
-            style: const TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: Color.fromARGB(255, 30, 154, 255))),
-      ],
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.grey.shade100,
       appBar: AppBar(
-        title: const Text('Thông tin cửa hàng',
-            style: TextStyle(fontWeight: FontWeight.bold)),
+        title: Text('Thông tin cửa hàng', style: GoogleFonts.quicksand(fontWeight: FontWeight.bold)),
         backgroundColor: Colors.white,
+        elevation: 1,
+        shadowColor: Colors.black.withOpacity(0.1),
+        systemOverlayStyle: SystemUiOverlayStyle.dark,
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(15),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildSectionCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildSectionTitleWithIcon(Icons.store, 'Thông tin cửa hàng'),
-                  const SizedBox(height: 16),
-                  _buildInputField(
-                      label: 'Tên cửa hàng',
-                      key: 'tenCuaHang',
-                      hint: 'Ví dụ: Cửa hàng TeckStore'),
-                  _buildInputField(
-                      label: 'Địa chỉ',
-                      key: 'diaChi',
-                      hint: 'Ví dụ: Thanh Xuân, Hà Nội'),
-                  _buildInputField(
-                      label: 'Số điện thoại',
-                      key: 'soDienThoai',
-                      keyboardType: TextInputType.phone,
-                      hint: 'Ví dụ: 0378048xxx'),
-                  _buildInputField(
-                      label: 'Email',
-                      key: 'email',
-                      keyboardType: TextInputType.emailAddress,
-                      hint: 'Ví dụ: abc@gmail.com'),
-                  _buildInputField(
-                      label: 'Mã số thuế',
-                      key: 'maSoThue',
-                      hint: 'Ví dụ: 0312345678'),
-                  _buildInputField(
-                      label: 'Website',
-                      key: 'website',
-                      hint: 'Ví dụ: www.example.com'),
-                ],
+      body: GestureDetector(
+        onTap: () => FocusScope.of(context).unfocus(),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildSectionTitle('Thông tin chung'),
+              _buildInputField(label: 'Tên cửa hàng', key: 'tenCuaHang', icon: Icons.store_outlined, hint: 'TeckSale'),
+              _buildInputField(label: 'Địa chỉ', key: 'diaChi', icon: Icons.location_on_outlined, hint: 'Thanh Xuân, Hà Nội'),
+              _buildInputField(label: 'Số điện thoại', key: 'soDienThoai', icon: Icons.phone_outlined, keyboardType: TextInputType.phone),
+              _buildInputField(label: 'Email', key: 'email', icon: Icons.email_outlined, keyboardType: TextInputType.emailAddress),
+              _buildInputField(label: 'Mã số thuế', key: 'maSoThue', icon: Icons.policy_outlined),
+              _buildInputField(label: 'Website', key: 'website', icon: Icons.language_outlined),
+
+              const SizedBox(height: 24),
+              const Divider(),
+              const SizedBox(height: 16),
+              
+              _buildSectionTitle('Thông tin thanh toán'),
+               Padding(
+                padding: const EdgeInsets.only(bottom: 12.0),
+                child: Text(
+                  'Ngân hàng phổ biến',
+                  style: GoogleFonts.roboto(fontWeight: FontWeight.w600, fontSize: 16, color: Colors.grey.shade800),
+                ),
               ),
-            ),
-            _buildSectionCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildSectionTitleWithIcon(
-                      Icons.account_balance, 'Thông tin ngân hàng'),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Chọn ngân hàng phổ biến',
-                    style:
-                        TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 8,
-                    children:
-                        nganHangPhoBien.map(_buildPopularBankChip).toList(),
-                  ),
-                  const SizedBox(height: 24),
-                  _buildInputField(
-                      label: 'Tên ngân hàng',
-                      key: 'tenNganHang',
-                      hint: 'Ví dụ: MB Bank'),
-                  _buildInputField(
-                      label: 'Số tài khoản',
-                      key: 'soTaiKhoan',
-                      keyboardType: TextInputType.number,
-                      hint: 'Ví dụ: 1234567890123'),
-                  _buildInputField(
-                      label: 'Chủ tài khoản (Viết hoa không dấu)',
-                      key: 'chuTaiKhoan',
-                      capitalization: TextCapitalization.characters,
-                      hint: 'Ví dụ: NGUYEN VAN A'),
-                ],
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: nganHangPhoBien.map(_buildPopularBankChip).toList(),
               ),
-            ),
-          ],
+              const SizedBox(height: 24),
+              _buildInputField(label: 'Tên ngân hàng', key: 'tenNganHang', icon: Icons.account_balance_outlined),
+              _buildInputField(label: 'Số tài khoản', key: 'soTaiKhoan', icon: Icons.pin_outlined, keyboardType: TextInputType.number),
+              _buildInputField(
+                label: 'Chủ tài khoản (Viết hoa, không dấu)', 
+                key: 'chuTaiKhoan', 
+                icon: Icons.person_outlined,
+                capitalization: TextCapitalization.characters,
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -21,8 +21,8 @@ class _HoTroScreenState extends State<HoTroScreen> {
   bool _isTyping = false;
 
   // API key Gemini
-  final String _geminiApiKey = 'AIzaSyAHByRbz2ZJmIdORbW5l_b1F4fwJ7OGyEU';
-  final String _apiUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+  final String _geminiApiKey = 'AIzaSyBy4DpZ43OtU65hZKmeeu7ZaDBi2buyYZM';
+  final String _apiUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent';
 
   @override
   void initState() {
@@ -186,7 +186,7 @@ class _HoTroScreenState extends State<HoTroScreen> {
         return 'Không có phản hồi từ AI.';
       } else {
         print('API Error: ${response.statusCode} - ${response.body}');
-        return 'Lỗi kết nối: ${response.statusCode}. Vui lòng thử lại.';
+        return 'Gemini đang bận đi nghỉ dưỡng vui lòng thử lại sau khi gemini quay lại làm việc.';
       }
     } catch (e) {
       print('Network Error: $e');
@@ -565,7 +565,7 @@ class _HoTroScreenState extends State<HoTroScreen> {
                 '• Liên hệ hỗ trợ qua thông tin ở góc trên bên phải\n'
                 '• Hướng dẫn tính năng\n'
                 '• Tư vấn kỹ thuật\n\n'
-                'Tin nhắn được lưu tạm thời và tự động xóa sau 5 phút.',
+                'Tin nhắn được lưu tạm thời và tự động xóa sau 10 phút.',
                 style: TextStyle(fontSize: 13, height: 1.4),
               ),
             ],

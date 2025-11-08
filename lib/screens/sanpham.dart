@@ -1,3 +1,6 @@
+// lib/screens/sanpham.dart
+// (NÂNG CẤP: ĐỒNG BỘ donGia -> giaBan)
+
 import 'package:flutter/material.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -109,6 +112,7 @@ class _SanPhamScreenState extends State<SanPhamScreen> {
         sp.maSP.toLowerCase().contains(_searchText.toLowerCase())).toList();
   }
 
+  // (Hàm _showDialogAddOrEdit không đổi, chỉ thay đổi hàm _syncProductToWebsite)
   Future<void> _showDialogAddOrEdit({SanPham? sanPham}) async {
     final formKey = GlobalKey<FormState>();
     final maSPController = TextEditingController(text: sanPham?.maSP ?? '');
@@ -226,7 +230,7 @@ class _SanPhamScreenState extends State<SanPhamScreen> {
                               TextFormField(
                                 controller: donGiaController,
                                 decoration: InputDecoration(
-                                  labelText: 'Đơn giá',
+                                  labelText: 'Giá Bán (Đơn giá)', // Sửa label
                                   prefixIcon: Icon(Icons.attach_money, color: Colors.green.shade600, size: 20),
                                   border: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(8),
@@ -242,8 +246,8 @@ class _SanPhamScreenState extends State<SanPhamScreen> {
                                 ),
                                 keyboardType: TextInputType.number,
                                 validator: (value) {
-                                  if (value == null || value.isEmpty) return 'Nhập đơn giá';
-                                  if (double.tryParse(value) == null) return 'Đơn giá phải là số';
+                                  if (value == null || value.isEmpty) return 'Nhập giá bán';
+                                  if (double.tryParse(value) == null) return 'Giá bán phải là số';
                                   return null;
                                 },
                               ),
@@ -276,7 +280,7 @@ class _SanPhamScreenState extends State<SanPhamScreen> {
                               TextFormField(
                                 controller: giaNhapController,
                                 decoration: InputDecoration(
-                                  labelText: 'Giá nhập',
+                                  labelText: 'Giá Vốn (Giá nhập)', // Sửa label
                                   prefixIcon: Icon(Icons.shopping_bag, color: Colors.purple.shade600, size: 20),
                                   border: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(8),
@@ -292,8 +296,8 @@ class _SanPhamScreenState extends State<SanPhamScreen> {
                                 ),
                                 keyboardType: TextInputType.number,
                                 validator: (value) {
-                                  if (value == null || value.isEmpty) return 'Nhập giá nhập';
-                                  if (double.tryParse(value) == null) return 'Giá nhập phải là số';
+                                  if (value == null || value.isEmpty) return 'Nhập giá vốn';
+                                  if (double.tryParse(value) == null) return 'Giá vốn phải là số';
                                   return null;
                                 },
                               ),
@@ -368,28 +372,30 @@ class _SanPhamScreenState extends State<SanPhamScreen> {
                                           id: sanPham?.id ?? '',
                                           maSP: maSPController.text.trim(),
                                           tenSP: tenSPController.text.trim(),
-                                          donGia: double.parse(donGiaController.text.trim()),
-                                          giaNhap: double.parse(giaNhapController.text.trim()),
+                                          donGia: double.parse(donGiaController.text.trim()), // Đây là Giá Bán
+                                          giaNhap: double.parse(giaNhapController.text.trim()), // Đây là Giá Vốn
                                           donVi: donViController.text.trim(),
                                           tonKho: int.parse(tonKhoController.text.trim()),
                                         );
 
                                         if (user == null) {
-                                          if (mounted) {
-                                            ScaffoldMessenger.of(context).showSnackBar(
-                                              const SnackBar(content: Text('Vui lòng đăng nhập để thêm/sửa sản phẩm.')),
-                                            );
-                                            setDialogState(() => isSaving = false);
-                                            return;
-                                          }
+                                          throw Exception("Vui lòng đăng nhập để thêm/sửa sản phẩm.");
+                                        }
+                                        
+                                        DatabaseReference sanPhamRef;
+                                        
+                                        if (sanPham == null) {
+                                          sanPhamRef = dbRef.child('nguoidung/${user!.uid}/sanpham').push();
+                                          await sanPhamRef.set(newSP.toMap());
+                                          newSP.id = sanPhamRef.key!;
+                                        } else {
+                                          sanPhamRef = dbRef.child('nguoidung/${user!.uid}/sanpham').child(newSP.id);
+                                          await sanPhamRef.set(newSP.toMap());
                                         }
 
-                                        if (sanPham == null) {
-                                          final newRef = dbRef.child('nguoidung/${user!.uid}/sanpham').push();
-                                          await newRef.set(newSP.toMap());
-                                        } else {
-                                          await dbRef.child('nguoidung/${user!.uid}/sanpham').child(newSP.id).set(newSP.toMap());
-                                        }
+                                        // ✨ 3. TỰ ĐỘNG ĐỒNG BỘ (LOGIC MỚI) ✨
+                                        await _syncProductToWebsite(newSP);
+                                        // -------------------------------------
 
                                         if (mounted) {
                                           Navigator.pop(context);
@@ -438,6 +444,33 @@ class _SanPhamScreenState extends State<SanPhamScreen> {
     );
   }
 
+  // ✨ --- HÀM ĐỒNG BỘ ĐÃ CẬP NHẬT LOGIC GIÁ --- ✨
+  Future<void> _syncProductToWebsite(SanPham privateProduct) async {
+    if (user == null) return;
+    
+    final String productId = privateProduct.id;
+    if (productId.isEmpty) return;
+
+    final webProductRef = dbRef.child('website_data/${user!.uid}/products/$productId');
+    
+    final snapshot = await webProductRef.get();
+    
+    if (snapshot.exists) {
+      // Nếu sản phẩm đã có trên web, đồng bộ các trường quan trọng
+      await webProductRef.update({
+        'tenSP': privateProduct.tenSP,
+        'maSP': privateProduct.maSP,
+        'donVi': privateProduct.donVi,
+        'tonKho': privateProduct.tonKho,
+        'giaBan': privateProduct.donGia, // ✨ CẬP NHẬT: Giá Bán (donGia) -> giaBan (web)
+        // 'giaGoc' (giá gạch ngang) sẽ được giữ nguyên, người dùng tự sửa
+        // 'moTa', 'anhWeb', 'thuTu' ... sẽ được giữ nguyên
+      });
+    }
+    // Nếu chưa tồn tại, hàm này không làm gì cả.
+  }
+  
+  // (Hàm _deleteSanPham không đổi, nó đã đồng bộ xóa)
   Future<void> _deleteSanPham(String id) async {
     if (user == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -447,8 +480,10 @@ class _SanPhamScreenState extends State<SanPhamScreen> {
     }
     try {
       await dbRef.child('nguoidung/${user!.uid}/sanpham').child(id).remove();
+      await dbRef.child('website_data/${user!.uid}/products/$id').remove();
+
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Xóa thành công')),
+        const SnackBar(content: Text('Xóa thành công ở cả kho tổng và web')),
       );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -457,6 +492,7 @@ class _SanPhamScreenState extends State<SanPhamScreen> {
     }
   }
 
+  // (Hàm _showProductDetails và _buildDetailRow đã ẩn Giá vốn)
   void _showProductDetails(SanPham sp) {
     showDialog(
       context: context,
@@ -481,7 +517,6 @@ class _SanPhamScreenState extends State<SanPhamScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Header
                 Row(
                   children: [
                     Icon(Icons.inventory_2, color: Colors.blue.shade600, size: 28),
@@ -504,19 +539,18 @@ class _SanPhamScreenState extends State<SanPhamScreen> {
                 const Divider(height: 1, thickness: 1),
                 const SizedBox(height: 16),
 
-                // Details
                 _buildDetailRow('Mã sản phẩm', sp.maSP, Icons.qr_code, Colors.orange.shade600),
                 const SizedBox(height: 12),
-                _buildDetailRow('Đơn giá', FormatCurrency.format(sp.donGia, decimalDigits: 0), Icons.attach_money, Colors.green.shade600),
+                _buildDetailRow('Giá Bán', FormatCurrency.format(sp.donGia, decimalDigits: 0), Icons.attach_money, Colors.green.shade600), // Sửa label
                 const SizedBox(height: 12),
-                _buildDetailRow('Giá nhập', FormatCurrency.format(sp.giaNhap, decimalDigits: 0), Icons.shopping_bag, Colors.purple.shade600),
-                const SizedBox(height: 12),
+                // ✨ ẨN GIÁ VỐN (GIÁ NHẬP)
+                // _buildDetailRow('Giá nhập', FormatCurrency.format(sp.giaNhap, decimalDigits: 0), Icons.shopping_bag, Colors.purple.shade600),
+                // const SizedBox(height: 12),
                 _buildDetailRow('Tồn kho', '${sp.tonKho}', Icons.inventory, Colors.indigo.shade600),
                 const SizedBox(height: 12),
                 _buildDetailRow('Đơn vị', sp.donVi, Icons.straighten, Colors.teal.shade600),
                 const SizedBox(height: 24),
 
-                // Close button
                 Center(
                   child: ElevatedButton(
                     style: ElevatedButton.styleFrom(
@@ -540,94 +574,92 @@ class _SanPhamScreenState extends State<SanPhamScreen> {
     );
   }
 
-void _showSummaryDialog() {
-  final totalProducts = dsSanPham.length;
-  final totalStock = dsSanPham.fold<int>(0, (sum, sp) => sum + (sp.tonKho ?? 0));
-  final outOfStock = dsSanPham.where((sp) => sp.tonKho == 0).length;
+  // (Hàm _showSummaryDialog đã ẩn Giá vốn)
+  void _showSummaryDialog() {
+    final totalProducts = dsSanPham.length;
+    final totalStock = dsSanPham.fold<int>(0, (sum, sp) => sum + (sp.tonKho ?? 0));
+    final outOfStock = dsSanPham.where((sp) => sp.tonKho == 0).length;
 
-  // Thêm dòng này để tính tổng tiền hàng
-  final totalInventoryValue = dsSanPham.fold<double>(0.0, (sum, sp) {
-  final tonKho = sp.tonKho ?? 0;
-  final giaNhap = sp.giaNhap ?? 0.0;
-  return sum + (tonKho * giaNhap);
-});
+    // ✨ ẨN GIÁ VỐN
+    // final totalInventoryValue = dsSanPham.fold<double>(0.0, (sum, sp) {
+    //   final tonKho = sp.tonKho ?? 0;
+    //   final giaNhap = sp.giaNhap ?? 0.0;
+    //   return sum + (tonKho * giaNhap);
+    // });
 
-  showDialog(
-    context: context,
-    builder: (context) {
-      return Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        child: Container(
-          width: MediaQuery.of(context).size.width * 0.9,
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.1),
-                blurRadius: 10,
-                offset: const Offset(0, 5),
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Header
-              Row(
-                children: [
-                  Icon(Icons.assessment, color: Colors.blue.shade600, size: 28),
-                  const SizedBox(width: 12),
-                  const Text(
-                    'Tổng quan sản phẩm',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          child: Container(
+            width: MediaQuery.of(context).size.width * 0.9,
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 10,
+                  offset: const Offset(0, 5),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.assessment, color: Colors.blue.shade600, size: 28),
+                    const SizedBox(width: 12),
+                    const Text(
+                      'Tổng quan sản phẩm',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                const Divider(height: 1, thickness: 1),
+                const SizedBox(height: 16),
+
+                _buildDetailRow('Tổng sản phẩm', '$totalProducts', Icons.inventory_2, Colors.blue.shade600),
+                const SizedBox(height: 12),
+                _buildDetailRow('Tổng số tồn kho', '$totalStock', Icons.store, Colors.green.shade600),
+                const SizedBox(height: 12),
+                _buildDetailRow('Số sản phẩm hết hàng', '$outOfStock', Icons.warning, Colors.red.shade600),
+                const SizedBox(height: 12),
+                // ✨ ẨN TỔNG TIỀN HÀNG (GIÁ VỐN)
+                // _buildDetailRow('Tổng tiền hàng', FormatCurrency.format(totalInventoryValue, decimalDigits: 0), Icons.monetization_on, Colors.purple.shade600),
+                // const SizedBox(height: 24),
+
+                Center(
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue.shade600,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    ),
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text(
+                      'Đóng',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                     ),
                   ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              const Divider(height: 1, thickness: 1),
-              const SizedBox(height: 16),
-
-              // Summary Details
-              _buildDetailRow('Tổng sản phẩm', '$totalProducts', Icons.inventory_2, Colors.blue.shade600),
-              const SizedBox(height: 12),
-              _buildDetailRow('Tổng số tồn kho', '$totalStock', Icons.store, Colors.green.shade600),
-              const SizedBox(height: 12),
-              _buildDetailRow('Số sản phẩm hết hàng', '$outOfStock', Icons.warning, Colors.red.shade600),
-              const SizedBox(height: 12),
-              // Thêm dòng này vào đây
-              _buildDetailRow('Tổng tiền hàng', FormatCurrency.format(totalInventoryValue, decimalDigits: 0), Icons.monetization_on, Colors.purple.shade600),
-              const SizedBox(height: 24),
-
-              // Close button
-              Center(
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blue.shade600,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                  ),
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text(
-                    'Đóng',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-      );
-    },
-  );
-}
+        );
+      },
+    );
+  }
 
   Widget _buildDetailRow(String label, String value, IconData icon, Color color) {
     return Row(
@@ -652,31 +684,32 @@ void _showSummaryDialog() {
     );
   }
 
+  // (Hàm _buildSearchBar giữ nguyên)
   Widget _buildSearchBar() {
     return Container(
-      margin: const EdgeInsets.all(16),
+      margin: const EdgeInsets.fromLTRB(16, 16, 16, 8), 
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(12), 
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
       child: TextField(
         decoration: InputDecoration(
-          hintText: ' Tìm kiếm sản phẩm...',
-          hintStyle: TextStyle(color: Colors.grey[600], fontSize: 16),
-          prefixIcon: Icon(Icons.search, color: Colors.grey[600], size: 24),
+          hintText: 'Tìm theo tên hoặc mã sản phẩm...',
+          hintStyle: TextStyle(color: Colors.grey[500], fontSize: 15),
+          prefixIcon: Icon(Icons.search, color: Colors.grey[500], size: 22),
           border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: BorderRadius.circular(12),
             borderSide: BorderSide.none,
           ),
           filled: true,
           fillColor: Colors.white,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          contentPadding: const EdgeInsets.symmetric(vertical: 12),
         ),
         onChanged: (value) {
           setState(() {
@@ -688,34 +721,35 @@ void _showSummaryDialog() {
     );
   }
 
+  // (Hàm _buildProductItem đã ẩn Giá vốn)
   Widget _buildProductItem(SanPham sp, int index) {
     return GestureDetector(
       onTap: () => _showProductDetails(sp),
       child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: [Colors.white, Colors.grey.shade50, Colors.white],
           ),
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(10),
           border: Border.all(color: Colors.grey.shade200, width: 1),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.06),
-              blurRadius: 8,
+              color: Colors.black.withOpacity(0.1),
+              blurRadius: 2,
               offset: const Offset(0, 4),
             ),
           ],
         ),
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(10),
           child: Row(
             children: [
               Container(
-                width: 30,
-                height: 30,
+                width: 24,
+                height: 24,
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     colors: [Colors.blue.shade600, const Color.fromARGB(255, 51, 140, 241)],
@@ -724,7 +758,7 @@ void _showSummaryDialog() {
                   boxShadow: [
                     BoxShadow(
                       color: Colors.blue.withOpacity(0.3),
-                      blurRadius: 6,
+                      blurRadius: 1,
                       offset: const Offset(0, 3),
                     ),
                   ],
@@ -762,7 +796,7 @@ void _showSummaryDialog() {
                       const SizedBox(width: 16),
                       _buildInfoChip(Icons.qr_code, 'Mã: ${sp.maSP}', Colors.orange),
                       const SizedBox(width: 12),
-                      _buildInfoChip(Icons.attach_money, 'Đơn giá: ${FormatCurrency.format(sp.donGia, decimalDigits: 0)}', Colors.green),
+                      _buildInfoChip(Icons.attach_money, 'Giá Bán: ${FormatCurrency.format(sp.donGia, decimalDigits: 0)}', Colors.green), // Sửa label
                       const SizedBox(width: 12),
                       _buildInfoChip(Icons.inventory, 'Tồn kho: ${sp.tonKho}', Colors.indigo),
                     ],
@@ -811,9 +845,45 @@ void _showSummaryDialog() {
     );
   }
 
+  // (Hàm _showDeleteConfirmation giữ nguyên)
+  void _showDeleteConfirmation(SanPham sp) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            Icon(Icons.warning, color: Colors.orange.shade600, size: 28),
+            const SizedBox(width: 12),
+            const Text('Xác nhận xóa'),
+          ],
+        ),
+        content: Text('Bạn có chắc muốn xóa sản phẩm "${sp.tenSP}"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Hủy'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red.shade600,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () {
+              Navigator.pop(context);
+              _deleteSanPham(sp.id);
+            },
+            child: const Text('Xóa', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // (Hàm _buildInfoChip đã được thêm vào từ lần trước)
   Widget _buildInfoChip(IconData icon, String text, Color color) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [color.withOpacity(0.1), color.withOpacity(0.05)],
@@ -849,126 +919,45 @@ void _showSummaryDialog() {
     );
   }
 
-  void _showDeleteConfirmation(SanPham sp) {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(
-          children: [
-            Icon(Icons.warning, color: Colors.orange.shade600, size: 28),
-            const SizedBox(width: 12),
-            const Text('Xác nhận xóa'),
-          ],
-        ),
-        content: Text('Bạn có chắc muốn xóa sản phẩm "${sp.tenSP}"?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Hủy'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red.shade600,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            onPressed: () {
-              Navigator.pop(context);
-              _deleteSanPham(sp.id);
-            },
-            child: const Text('Xóa', style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
-    );
-  }
-
+  // (Hàm build() giữ nguyên)
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.grey.shade50,
       appBar: AppBar(
         elevation: 0,
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.grey.shade800,
+        backgroundColor: const Color.fromARGB(255, 29, 140, 244),
+        foregroundColor: const Color.fromARGB(255, 255, 255, 255),
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(
+            bottom: Radius.circular(25),
+          ),
+        ),
         title: const Text(
           'Quản lý Sản phẩm',
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20),
         ),
         actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 8.0),
-            child: IconButton(
-              onPressed: _showSummaryDialog,
-              icon: Row(
-                children: [
-                  Icon(Icons.assessment, color: const Color.fromARGB(255, 12, 112, 225), size: 24),
-                  const SizedBox(width: 4),
-                  Text(
-                    'Tổng',
-                    style: TextStyle(
-                      color: const Color.fromARGB(255, 66, 66, 66),
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+          IconButton(
+            onPressed: () {
+              if (user == null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Vui lòng đăng nhập để thêm sản phẩm.')),
+                );
+                return;
+              }
+              _showDialogAddOrEdit();
+            },
+            icon: const Icon(Icons.add_circle_outline, size: 26),
           ),
+          IconButton(
+            onPressed: _showSummaryDialog,
+            icon: const Icon(Icons.assessment, size: 26),
+          ),
+          const SizedBox(width: 8), 
         ],
       ),
-      floatingActionButton: Padding(
-        padding: const EdgeInsets.only(bottom: 16.0),
-        child: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [Colors.blue.shade600, Colors.blue.shade800],
-            ),
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.blue.withOpacity(0.3),
-                blurRadius: 8,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              borderRadius: BorderRadius.circular(16),
-              onTap: () {
-                if (user == null) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Vui lòng đăng nhập để thêm sản phẩm.')),
-                  );
-                  return;
-                }
-                _showDialogAddOrEdit();
-              },
-              child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.add, color: Colors.white, size: 15),
-                    SizedBox(width: 8),
-                    Text(
-                      'Thêm sản phẩm',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
+
       body: Column(
         children: [
           _buildSearchBar(),
