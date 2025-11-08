@@ -18,7 +18,7 @@ jobs:
       # Bước 2: Cài đặt Flutter (ĐÃ SỬA LỖI THỤT ĐẦU DÒNG)
       - uses: subosito/flutter-action@v2
         with:
-           channel: 'stable'
+           flutter-version: '3.35.7'
 
       # Bước 3: Build app Flutter Web
       - run: flutter build web --release --web-renderer canvaskit
